@@ -4,7 +4,7 @@ from torchcor.ionic import ModifiedMS2v, CourtemancheRamirezNattel
 from pathlib import Path
 
 # Specify the GPU device to run the simulation on 
-tc.set_device("cuda:1")
+tc.set_device("cuda:0")
 dtype = tc.float32
 # The total simulation duration (ms)
 simulation_time = 600

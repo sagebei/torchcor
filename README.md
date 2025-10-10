@@ -56,7 +56,13 @@ Unlike traditional CPU-based solvers like PETSc, which rely heavily on MPI-based
 
 ## 🚀 Quickstart Example
 
-Here’s a concise example to run a simulation using the **TenTusscher-Panfilov** ionic model on a bi-ventricle mesh. The inputs are:
+Here’s a concise example to run a simulation using the **TenTusscher-Panfilov** ionic model on a bi-ventricle mesh.
+
+🧩 **Mesh file:**  
+You can download the bi-ventricle mesh from the following link:  
+[Google Drive – Bi-ventricle Mesh](https://drive.google.com/drive/folders/1_lWTNaTni4GElSSS8tdc8YmbwOZ4PcaK?usp=drive_link)
+
+The inputs are:
 
 - `.pts` file: coordinates of the vertices
 - `.elem` file: connectivities of the mesh

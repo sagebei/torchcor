@@ -4,7 +4,7 @@ from torchcor.ionic import TenTusscherPanfilov
 from pathlib import Path
 
 # Specify the GPU device for running the simulation
-tc.set_device("cuda:1")
+tc.set_device("cuda:0")
 dtype = tc.float32
 # The total simulation duration (ms)
 simulation_time = 600
