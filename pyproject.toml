@@ -14,7 +14,7 @@ dependencies = [
     "matplotlib", 
     "numpy",       
     "pygmsh",      
-    "pynvml",      
+    "nvidia-ml-py",      
     "pyvista",     
     "scipy",
     "wfdb",

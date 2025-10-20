@@ -290,7 +290,7 @@ class Monodomain:
         im = IGBWriter({
             "fname": os.path.join(self.result_path, "phie.igb"),
             "Tend": self.T + 1,
-            "nt": 1 + self.nt,
+            "nt": self.nt + 1,
             "nx": self.n_nodes,
             "ny": 1,
             "nz": 1
@@ -313,18 +313,19 @@ class Monodomain:
         ECGspd.to_csv(self.result_path / 'simulated_filtered.dat', sep=' ', header=False, mode='w')
         
 
-    def pt_to_igb(self, fname: str = os.path.join(self.result_path,"vm.igb")):
+    def pt_to_igb(self, filename: str = "vm.igb"):
         ''' This function converts the output to an igb file format
         '''
-        data   = torch.load(self.result_path / "Vm.pt", map_location=torch.device('cpu'))  #ntXnx
+        data = torch.load(self.result_path / "Vm.pt", map_location=torch.device('cpu')).numpy().astype(np.float32)  #ntXnx
+        
         header = {'x':self.n_nodes, 'y':1, 'z':1,
-                  'units_x': 'mm','units_y': 'mm','units_z': 'mm',
-                  'units': 'mV',
-                  't':self.nt, 'org_t': 0.0, 'Tend': self.T,
-                  'units_t': 'ms' }
+                  't': data.shape[0], 
+                  'org_t': 0.0, 
+                  'Tend': self.T}
+        
         im = IGBWriter()
         im.initialise_from_data(header, data)
-        im.set_fname(fname)
+        im.set_fname(os.path.join(self.result_path, filename))
         im.write_data_to_file()
         
         
