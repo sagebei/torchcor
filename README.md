@@ -128,5 +128,4 @@ pip install torchcor
 
 **TorchCor** is developed and maintained by [Bei Zhou](mailto:bei.zhou@imperial.ac.uk), [Maximilian Balmus](mailto:mbalmus@turing.ac.uk), [Cesare Corrado](mailto:c.corrado@imperial.ac.uk), [Shuang Qian](mailto:s.qian23@imperial.ac.uk), and [Steven A. Niederer​](mailto:s.niederer@imperial.ac.uk) in the [Cardiac Electro-Mechanics Research Group (CEMRG)](https://www.cemrg.co.uk/) at Imperial College London.
 
-
 We welcome contributions from the community! Feel free to open issues or submit pull requests.
