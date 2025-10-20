@@ -288,7 +288,7 @@ class Monodomain:
 
     def simulated_ECG(self):
         im = IGBWriter({
-            "fname": self.result_path / "phie.igb",
+            "fname": os.path.join(self.result_path, "phie.igb"),
             "Tend": self.T + 1,
             "nt": 1 + self.nt,
             "nx": self.n_nodes,
@@ -296,12 +296,12 @@ class Monodomain:
             "nz": 1
         })
 
-        path = self.result_path / "Phi_e.pt"
+        path = os.path.join(self.result_path, "Phi_e.pt")
         phie = torch.load(path).numpy()
         for p in phie:
            im.imshow(p)
         
-        ECGs = Ecg(str(self.result_path / 'phie.igb'), dt=1)
+        ECGs = Ecg(os.path.join(self.result_path, 'phie.igb'), dt=1)
 
         lp, hp = 100, 0.01
         ECGs.filter = 'butterworth'
@@ -312,4 +312,22 @@ class Monodomain:
         print(ECGspd.columns)
         ECGspd.to_csv(self.result_path / 'simulated_filtered.dat', sep=' ', header=False, mode='w')
         
+
+    def pt_to_igb(self, fname: str = os.path.join(self.result_path,"vm.igb")):
+        ''' This function converts the output to an igb file format
+        '''
+        data   = torch.load(self.result_path / "Vm.pt", map_location=torch.device('cpu'))  #ntXnx
+        header = {'x':self.n_nodes, 'y':1, 'z':1,
+                  'units_x': 'mm','units_y': 'mm','units_z': 'mm',
+                  'units': 'mV',
+                  't':self.nt, 'org_t': 0.0, 'Tend': self.T,
+                  'units_t': 'ms' }
+        im = IGBWriter()
+        im.initialise_from_data(header, data)
+        im.set_fname(fname)
+        im.write_data_to_file()
+        
+        
+
+
 

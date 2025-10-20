@@ -174,7 +174,7 @@ class IGBWriter:
             pass
 
     def write_data_to_file(self):
-        ''' This function is to write all the data to a file; to uuse igberiter as a standalone'''
+        ''' This function is to write all the data to a file; to use igberiter as a standalone'''
         if self.__hwrt:
             self.__write_header()  
         for n in range(self._nt):
