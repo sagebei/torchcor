@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "High-Performance Large-Scale Cardic Electrophysiology Simulations on GPUs"
 authors = [{ name = "Bei Zhou", email = "bei.zhou@imperial.ac.uk" }]
 readme = "README.md" 
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "torch",
     "matplotlib", 
