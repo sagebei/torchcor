@@ -112,7 +112,8 @@ class Monodomain:
         ionic_time = 0
         electric_time = 0
         if verbose:
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             start_time = time.time()
 
         ### ionic ###
@@ -121,7 +122,8 @@ class Monodomain:
         #############
 
         if verbose:
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             ionic_time = time.time() - start_time
             start_time = time.time()
 
@@ -135,7 +137,8 @@ class Monodomain:
         u, n_iter = self.cg.solve(b, a_tol=a_tol, r_tol=r_tol, max_iter=max_iter)
         ################
         if verbose:
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             electric_time = time.time() - start_time
 
         return u, n_iter, ionic_time, electric_time
@@ -195,10 +198,6 @@ class Monodomain:
         if calculate_AT_RT:
             torch.save(activation_time.cpu(), self.result_path / "ATs.pt")
             torch.save(repolarization_time.cpu(), self.result_path / "RTs.pt")
-
-            # torch.save(self.K.to_sparse_coo().cpu(), self.result_path / "K.pt")
-            # torch.save(self.M.to_sparse_coo().cpu(), self.result_path / "M.pt")
-            # torch.save(self.A.to_sparse_coo().cpu(), self.result_path / "A.pt")
 
         if snapshot_interval < self.T:
             torch.save(torch.stack(solution_list, dim=0).cpu(), self.result_path / "Vm.pt")

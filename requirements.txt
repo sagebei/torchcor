@@ -4,7 +4,7 @@ nvidia_ml_py==12.575.51
 pandas==2.3.3
 petsc4py==3.24.1
 pygmsh==7.1.17
-pynvml==12.0.0
+nvidia-ml-py==3.295.00
 pyvista==0.45.3
 scikit_learn==1.7.2
 scipy==1.16.3
