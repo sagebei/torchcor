@@ -221,7 +221,7 @@ class Monodomain:
                     round(time.time() - solving_time, 2),
                     round(total_ionic_time, 2),
                     round(total_electric_time, 2),
-                    n_total_iter
+                    n_total_iter,
                     flush=True)
             
             if calculate_AT_RT:
