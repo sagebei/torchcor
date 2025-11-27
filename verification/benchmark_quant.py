@@ -202,7 +202,7 @@ if __name__ == "__main__":
     dt = 0.005  # ms
 
     device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float32
+    dtype = torch.float64
 
     ionic_model = TenTusscherPanfilov(cell_type="EPI", dt=dt, device=device, dtype=dtype)
     ionic_model.V_init = -85.23
@@ -239,7 +239,7 @@ if __name__ == "__main__":
                            device=device, 
                            dtype=dtype)
     plt.subplots(figsize=(6, 4))
-    for dx in [0.5, 0.2, 0.1]:
+    for dx in [0.1]:
         simulator.Chi = 140
         simulator.Cm = 0.01
         simulator.theta = 1
@@ -262,17 +262,17 @@ if __name__ == "__main__":
         plt.plot(simulator.diagonal_distance.cpu().numpy().tolist(), 
                  simulator.activation_time.cpu().numpy().tolist(), 
                  color=color,
-                 label=f'$\\Delta x$: {simulator.dx}')
+                 label=f'dx = {simulator.dx}')
 
 
     # Labels and title
-    plt.xlabel("Distance (mm)", fontsize=16)
-    plt.ylabel("Activation time (ms)", fontsize=16)
+    plt.xlabel("Distance (mm)", fontsize=14)
+    plt.ylabel("Activation time (ms)", fontsize=14)
 
     plt.xticks([0, 5, 10, 16, 21.4], fontsize=14)
     plt.yticks([10, 20, 30, 40, 50], fontsize=14)
     
-    plt.legend(fontsize=15) 
+    plt.legend(fontsize=14) 
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
     plt.savefig("activation_time.pdf", format="pdf")

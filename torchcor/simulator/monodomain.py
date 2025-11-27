@@ -6,7 +6,8 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 import torch
 import torchcor as tc
-from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates, nvmlDeviceGetMemoryInfo
+if torch.cuda.is_available():
+    from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetUtilizationRates, nvmlDeviceGetMemoryInfo
 import time
 from torchcor.core import *
 from pathlib import Path
@@ -49,9 +50,10 @@ class Monodomain:
         self.sigma_e = None
         self.simga_m = None
 
-        nvmlInit()
-        device_id = torch.cuda.current_device()
-        self.gpu_handle = nvmlDeviceGetHandleByIndex(device_id)
+        if torch.cuda.is_available():
+            nvmlInit()
+            device_id = torch.cuda.current_device()
+            self.gpu_handle = nvmlDeviceGetHandleByIndex(device_id)
 
         self.mesh_path = None
         self.result_path = None
@@ -174,20 +176,14 @@ class Monodomain:
             if calculate_AT_RT:
                 activation_time[(u > 0) & (activation_time == -1)] = t
                 repolarization_time[(activation_time > 0) & (repolarization_time == -1) & (u < -70)] = t
-
-                # mask_peak_update = (u > u_peak) & (activation_time > 0)
-                # u_peak[mask_peak_update] = u[mask_peak_update]
-                # repolarization_threshold = u_initial + 0.1 * (u_peak - u_initial)
-                # repolarization_time[(u < repolarization_threshold) &
-                #                     (repolarization_time == 0) &
-                #                     (activation_time > 0)] = t
             
             ### keep track of GPU usage ###
             if n % ts_per_frame == 0:
                 solution_list.append(u.clone())
 
-                gpu_utilisation_list.append(nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu)
-                gpu_memory_list.append(nvmlDeviceGetMemoryInfo(self.gpu_handle).used / 1e9)
+                if torch.cuda.is_available():
+                    gpu_utilisation_list.append(nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu)
+                    gpu_memory_list.append(nvmlDeviceGetMemoryInfo(self.gpu_handle).used / 1e9)
                 
                 if verbose and snapshot_interval != self.T:
                     print(f"t: {round(t, 1)}/{self.T}", 
@@ -209,15 +205,24 @@ class Monodomain:
 
         ### print log info to console ###
         if verbose:
-            print(self.ionic_model.name,
-                  self.n_nodes, 
-                  round(time.time() - solving_time, 2),
-                  round(total_ionic_time, 2),
-                  round(total_electric_time, 2),
-                  n_total_iter,
-                  f"{round(sum(gpu_utilisation_list)/len(gpu_utilisation_list), 2)}",
-                  f"{round(sum(gpu_memory_list)/len(gpu_memory_list), 2)}",
-                  flush=True)
+            if torch.cuda.is_available():
+                print(self.ionic_model.name,
+                    self.n_nodes, 
+                    round(time.time() - solving_time, 2),
+                    round(total_ionic_time, 2),
+                    round(total_electric_time, 2),
+                    n_total_iter,
+                    f"{round(sum(gpu_utilisation_list)/len(gpu_utilisation_list), 2)}",
+                    f"{round(sum(gpu_memory_list)/len(gpu_memory_list), 2)}",
+                    flush=True)
+            else:
+                print(self.ionic_model.name,
+                    self.n_nodes, 
+                    round(time.time() - solving_time, 2),
+                    round(total_ionic_time, 2),
+                    round(total_electric_time, 2),
+                    n_total_iter
+                    flush=True)
             
             if calculate_AT_RT:
                 print("ATs: ", activation_time.cpu().min().item(), activation_time.cpu().max().item(), flush=True)

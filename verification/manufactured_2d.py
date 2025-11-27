@@ -66,8 +66,6 @@ class Monodomain:
 
     def load_mesh(self):
         L = 1  # Length of domain in x and y directions
-        self.Nx = 100
-        self.Ny = 100  # Number of grid points in x and y
 
         x = np.linspace(0, L, self.Nx)
         y = np.linspace(0, L, self.Ny)
@@ -127,7 +125,9 @@ class Monodomain:
         t = 0
         n_total_iter = 0
 
-        diff_list = []
+        total_diff = 0
+        total_ref = 0
+
         for n in range(1, self.nt + 1):
             t += self.dt
 
@@ -148,41 +148,51 @@ class Monodomain:
             n_total_iter += n_iter
             
             diff = torch.norm(u - w, p=2) / torch.norm(w, p=2)
-            diff_list.append([t, diff.item()])
+            total_diff += torch.norm(u - w, p=2) ** 2
+            total_ref += torch.norm(w, p=2) ** 2
 
-        print(f"total iterations: {n_total_iter}")
-        fig, ax = plt.subplots(figsize=(6, 4))
-        diff_list = np.array(diff_list)    
-        plt.plot(diff_list[:, 0][:-200], diff_list[:, 1][:-200])
+            # diff_list.append([t, diff.item()])
+        final_diff = torch.sqrt(total_diff) / torch.sqrt(total_ref)
+        print(f"dt={self.dt}", f"dx={1/self.Nx}", final_diff.item())
 
-        plt.xlabel("Time (ms)", fontsize=14, fontname='Times New Roman')
-        plt.ylabel("Relative norm difference", fontsize=14, fontname='Times New Roman')
+        # print(f"total iterations: {n_total_iter}")
+        # fig, ax = plt.subplots(figsize=(6, 4))
+        # diff_list = np.array(diff_list)    
+        # plt.plot(diff_list[:, 0][:-200], diff_list[:, 1][:-200])
+
+        # plt.xlabel("Time (ms)", fontsize=14, fontname='Times New Roman')
+        # plt.ylabel("Relative norm difference", fontsize=14, fontname='Times New Roman')
         
-        x_space = np.linspace(0, 30, 5).tolist()
-        plt.xticks(x_space)
-        y_space = np.linspace(0, 0.006, 4).tolist()
-        plt.yticks(y_space)
+        # x_space = np.linspace(0, 30, 5).tolist()
+        # plt.xticks(x_space)
+        # y_space = np.linspace(0, 0.006, 4).tolist()
+        # plt.yticks(y_space)
         
-        # plt.legend()
-        plt.grid(True, linestyle="--", alpha=0.5)
-        plt.tight_layout()
-        plt.savefig("maufactured.pdf", format="pdf")
+        # # plt.legend()
+        # plt.grid(True, linestyle="--", alpha=0.5)
+        # plt.tight_layout()
+        # plt.savefig("maufactured.pdf", format="pdf")
 
 if __name__ == "__main__":
-    dt = 0.001  # ms
+    for dt in [1/40, 1/80, 1/160, 1/320, 1/640]:
+        for N in [40, 80, 160, 320, 640]:
+            try:
+                device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
 
-    device = torch.device(f"cuda:3" if torch.cuda.is_available() else "cpu")
-
-    simulator = Monodomain(ionic_model=None, 
-                           T=30, 
-                           dt=dt, 
-                           apply_rcm=False, 
-                           device=device)
-    simulator.load_mesh()
-    simulator.add_material_property(material_config=None)
-    simulator.assemble()
-    simulator.solve(a_tol=1e-5, 
-                    r_tol=1e-5, 
-                    max_iter=1000, 
-                    plot_interval=dt * 10, 
-                    verbose=True)
+                simulator = Monodomain(ionic_model=None, 
+                                    T=1, 
+                                    dt=dt, 
+                                    apply_rcm=False, 
+                                    device=device)
+                simulator.Nx = N
+                simulator.Ny = N
+                simulator.load_mesh()
+                simulator.add_material_property(material_config=None)
+                simulator.assemble()
+                simulator.solve(a_tol=1e-6, 
+                                r_tol=1e-6, 
+                                max_iter=1000, 
+                                plot_interval=dt * 10, 
+                                verbose=False)
+            except Exception:
+                print(f"dt={dt}", f"dx={1/N}", 0)
