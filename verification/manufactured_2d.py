@@ -174,8 +174,8 @@ class Monodomain:
         # plt.savefig("maufactured.pdf", format="pdf")
 
 if __name__ == "__main__":
-    for dt in [1/40, 1/80, 1/160, 1/320, 1/640]:
-        for N in [40, 80, 160, 320, 640]:
+    for dt in [1/20, 1/40, 1/80, 1/160, 1/320]:
+        for N in [80, 160, 320]:
             try:
                 device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -189,8 +189,8 @@ if __name__ == "__main__":
                 simulator.load_mesh()
                 simulator.add_material_property(material_config=None)
                 simulator.assemble()
-                simulator.solve(a_tol=1e-6, 
-                                r_tol=1e-6, 
+                simulator.solve(a_tol=1e-8, 
+                                r_tol=1e-8, 
                                 max_iter=1000, 
                                 plot_interval=dt * 10, 
                                 verbose=False)
