@@ -48,3 +48,4 @@ simulator.pt_to_vtk()  # generate VTK files
 # simulator.phie_recovery()
 # simulator.simulated_ECG()
 simulator.pt_to_igb()
+
