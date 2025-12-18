@@ -4,12 +4,12 @@ from math import log, exp, expm1
 
 @torch.jit.script
 class CourtemancheRamirezNattel:
-    def __init__(self, dt: float, device=None, dtype: torch.dtype = torch.float32):
+    def __init__(self, dt: float, device: torch.device=tc.get_device(), dtype: torch.dtype = torch.float32):
         self.name = "CourtemancheRamirezNattel"
         self.dt = dt
-        self.device = tc.get_device() if device is None else device
+        self.device = tc.get_device() 
         self.dtype = dtype
-        
+
         # Constants
         self.C_B1a = 3.79138232501097e-05
         self.C_B1b = 0.0811764705882353

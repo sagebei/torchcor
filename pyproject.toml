@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "torchcor"
-version = "0.2.4"
+version = "0.2.5"
 description = "High-Performance Large-Scale Cardic Electrophysiology Simulations on GPUs"
 authors = [{ name = "Bei Zhou", email = "bei.zhou@imperial.ac.uk" }]
 readme = "README.md" 
