@@ -5,10 +5,10 @@ from math import exp, sqrt
 
 @torch.jit.script
 class TenTusscherPanfilov:
-    def __init__(self, cell_type: str, dt: float, device: torch.device=tc.get_device(), dtype: torch.dtype = torch.float32):
+    def __init__(self, cell_type: str, dt: float, device: torch.device=tc.get_device(), dtype: torch.dtype=torch.float64):
         self.name = "TenTusscherPanfilov"
         self.dt = dt
-        self.device = tc.get_device()
+        self.device = device
         self.dtype = dtype
 
         self.cell_type = "EPI" if cell_type is None else cell_type
@@ -304,8 +304,6 @@ class TenTusscherPanfilov:
 
         self.V_tab = V_tab
 
-
-
         # construct VEk Lookup Table
         VEk = torch.arange(self.VEk_T_mn, self.VEk_T_mx, self.VEk_T_res).to(self.device).to(self.dtype)
         VEk_tab = torch.zeros((VEk.shape[0], self.VEk_NROWS)).to(self.device).to(self.dtype)
@@ -315,8 +313,6 @@ class TenTusscherPanfilov:
         VEk_tab[:, self.rec_iK1_idx] = (a_K1/(a_K1+b_K1))
 
         self.VEk_tab = VEk_tab
-
-
 
     def initialize(self, n_nodes: int):
         self.construct_tables()

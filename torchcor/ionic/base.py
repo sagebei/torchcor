@@ -3,7 +3,7 @@ from collections import OrderedDict
 
 
 class BaseCellModel:
-    def __init__(self, cell_model, device-None, dtype=torch.float64):
+    def __init__(self, cell_model, device=None, dtype=torch.float64):
         self.cell_model = cell_model
         self.dt = None
         self.device = tc.get_device() if device is None else device

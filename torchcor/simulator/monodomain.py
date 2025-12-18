@@ -19,13 +19,15 @@ from torchcor.tools.igbwriter import IGBWriter
 class Monodomain:
     def __init__(self, ionic_model, T, dt, device=None, dtype=None):
         self.device = tc.get_device() if device is None else device
-        self.dtype = dtype if dtype is not None else torch.float32
+        self.dtype = torch.float64 if dtype is None else dtype
         
         self.T = T  # ms
         self.dt = dt  # ms
         self.nt = int(T / dt)
 
         self.ionic_model = ionic_model
+        self.ionic_model.device = self.device
+        self.ionic_model.dtype = self.dtype
 
         self.pcd = None
         self.cg = None

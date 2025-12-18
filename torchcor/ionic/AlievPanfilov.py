@@ -22,12 +22,12 @@ class AlievPanfilov:
     def __init__(
         self,
         dt: float,
-        device: torch.device=tc.get_device(),
-        dtype: torch.dtype = torch.float32
+        device: torch.device=tc.get_device(), 
+        dtype: torch.dtype=torch.float64
     ):
         self.name = "AlievPanfilov"
         self.dt = dt
-        self.device = tc.get_device()
+        self.device = device
         self.dtype = dtype
         
 
