@@ -17,8 +17,8 @@ from torchcor.tools.igbwriter import IGBWriter
 
 
 class Monodomain:
-    def __init__(self, ionic_model, T, dt, device=tc.get_device(), dtype=None):
-        self.device = device
+    def __init__(self, ionic_model, T, dt, device=None, dtype=None):
+        self.device = tc.get_device() if device is None else device
         self.dtype = dtype if dtype is not None else torch.float32
         
         self.T = T  # ms

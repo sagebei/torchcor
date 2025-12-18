@@ -3,9 +3,10 @@ from collections import OrderedDict
 
 
 class BaseCellModel:
-    def __init__(self, cell_model, device, dtype=torch.float64):
+    def __init__(self, cell_model, device-None, dtype=torch.float64):
         self.cell_model = cell_model
-        self.device = device
+        self.dt = None
+        self.device = tc.get_device() if device is None else device
         self.dtype = dtype
 
         init_states, init_constants = self.cell_model.initConsts()
@@ -19,7 +20,7 @@ class BaseCellModel:
             self.name_constant_dict[constant_name] = init_constant
 
         self.H = None
-        self.dt = None
+        
 
     def default_constants(self):
         return dict(self.name_constant_dict)

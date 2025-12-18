@@ -4,8 +4,12 @@ from math import log, exp, expm1
 
 @torch.jit.script
 class CourtemancheRamirezNattel:
-    def __init__(self, dt: float, device: torch.device = tc.get_device(), dtype: torch.dtype = torch.float32):
+    def __init__(self, dt: float, device=None, dtype: torch.dtype = torch.float32):
         self.name = "CourtemancheRamirezNattel"
+        self.dt = dt
+        self.device = tc.get_device() if device is None else device
+        self.dtype = dtype
+        
         # Constants
         self.C_B1a = 3.79138232501097e-05
         self.C_B1b = 0.0811764705882353
@@ -191,10 +195,6 @@ class CourtemancheRamirezNattel:
         self.w = torch.tensor([self.w_init])
         self.xr = torch.tensor([self.xr_init])
         self.xs = torch.tensor([self.xs_init])
-
-        self.dt = dt
-        self.device = device
-        self.dtype = dtype
 
         self.f_Ca_rush_larsen_B = exp(((-self.dt)/self.tau_f_Ca))
         self.u_rush_larsen_B = exp(((-self.dt)/self.tau_u))

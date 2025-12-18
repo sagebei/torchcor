@@ -3,8 +3,11 @@ import torchcor as tc
 
 @torch.jit.script
 class ModifiedMS2v:
-    def __init__(self, dt: float, device: torch.device = tc.get_device(), dtype: torch.dtype = torch.float32):
+    def __init__(self, dt: float, device=None, dtype: torch.dtype = torch.float32):
         self.name = "ModifiedMS2v"
+        self.dt = dt
+        self.device = tc.get_device() if device is None else device
+        self.dtype = dtype
 
         self.tau_in = 0.1
         self.tau_out = 9.0
@@ -18,9 +21,8 @@ class ModifiedMS2v:
         self.DV  = self.vmax - self.vmin
 
         self.H = torch.tensor(1.0, device=device, dtype=dtype) 
-        self.dt = dt
-        self.device = device
-        self.dtype = dtype
+        
+        
 
     def to_dimensionless(self, U: torch.Tensor) -> torch.Tensor:
         return (U - self.vmin) / self.DV

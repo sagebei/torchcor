@@ -22,13 +22,14 @@ class AlievPanfilov:
     def __init__(
         self,
         dt: float,
-        device: torch.device = tc.get_device(),
+        device: torch.device = None,
         dtype: torch.dtype = torch.float32
     ):
         self.name = "AlievPanfilov"
-        self.device = device
+        self.dt = dt
+        self.device = tc.get_device() if device is None else device
         self.dtype = dtype
-        self.dt     = dt
+        
 
         # ----- Model constants (from specification) -----
         self.t_norm  = 12.9

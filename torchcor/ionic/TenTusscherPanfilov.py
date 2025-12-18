@@ -5,8 +5,11 @@ from math import exp, sqrt
 
 @torch.jit.script
 class TenTusscherPanfilov:
-    def __init__(self, cell_type: str, dt: float, device: torch.device = tc.get_device(), dtype: torch.dtype = torch.float32):
+    def __init__(self, cell_type: str, dt: float, device=None, dtype: torch.dtype = torch.float32):
         self.name = "TenTusscherPanfilov"
+        self.dt = dt
+        self.device = tc.get_device() if device is None else device
+        self.dtype = dtype
 
         self.cell_type = "EPI" if cell_type is None else cell_type
         # Constants
@@ -177,10 +180,6 @@ class TenTusscherPanfilov:
         self.Xr2 = torch.tensor([self.Xr2_init])
         self.Xs = torch.tensor([self.Xs_init])
         self.D = torch.tensor([self.d_init])
-
-        self.dt = dt
-        self.device = device
-        self.dtype = dtype
 
         self.V_row = None
 
