@@ -128,6 +128,25 @@ pip install torchcor
 
 For a GPU-enabled Docker setup to run TorchCor without installing dependencies on your host system, please see the `docker/` folder.  
 
+## 📖 Citation
+
+If you use TorchCor in academic work, please consider citing:
+
+```bibtex
+@article{zhou2026torchCor,
+  title   = {TorchCor: High-performance cardiac electrophysiology simulations with the finite element method on GPUs},
+  author  = {Zhou, Bei and Balmus, Maximilian and Corrado, Cesare and Cicci, Ludovica and Qian, Shuang and Niederer, Steven A.},
+  journal = {SoftwareX},
+  volume  = {33},
+  pages   = {102521},
+  year    = {2026},
+  month   = feb,
+  doi     = {10.1016/j.softx.2026.102521},
+  publisher = {Elsevier}
+}
+
+```
+
 ## 👩‍💻 Contributors
 
 **TorchCor** is developed and maintained by [Bei Zhou](mailto:bei.zhou@imperial.ac.uk), [Maximilian Balmus](mailto:mbalmus@turing.ac.uk), [Cesare Corrado](mailto:c.corrado@imperial.ac.uk), [Shuang Qian](mailto:s.qian23@imperial.ac.uk), and [Steven A. Niederer​](mailto:s.niederer@imperial.ac.uk) in the [Cardiac Electro-Mechanics Research Group (CEMRG)](https://www.cemrg.co.uk/) at Imperial College London.
