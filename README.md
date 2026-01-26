@@ -133,18 +133,15 @@ For a GPU-enabled Docker setup to run TorchCor without installing dependencies o
 If you use TorchCor in academic work, please consider citing:
 
 ```bibtex
-@article{zhou2026torchCor,
-  title   = {TorchCor: High-performance cardiac electrophysiology simulations with the finite element method on GPUs},
-  author  = {Zhou, Bei and Balmus, Maximilian and Corrado, Cesare and Cicci, Ludovica and Qian, Shuang and Niederer, Steven A.},
-  journal = {SoftwareX},
-  volume  = {33},
-  pages   = {102521},
-  year    = {2026},
-  month   = feb,
-  doi     = {10.1016/j.softx.2026.102521},
-  publisher = {Elsevier}
+@article{zhou2026torchcor,
+  title={TorchCor: High-performance cardiac electrophysiology simulations with the finite element method on GPUs},
+  author={Zhou, Bei and Balmus, Maximilian and Corrado, Cesare and Cicci, Ludovica and Qian, Shuang and Niederer, Steven A},
+  journal={SoftwareX},
+  volume={33},
+  pages={102521},
+  year={2026},
+  publisher={Elsevier}
 }
-
 ```
 
 ## 👩‍💻 Contributors

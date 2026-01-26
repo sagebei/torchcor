@@ -2,6 +2,10 @@ from pathlib import Path
 import numpy as np
 np.set_printoptions(precision=15, suppress=False)
 
+def fmt(v, decimals=10):
+    s = f"{float(v):.{decimals}f}"
+    return s.rstrip("0").rstrip(".")
+
 class MeshReader:
     def __init__(self, mesh_dir: str):
         self.mesh_dir = Path(mesh_dir)
@@ -64,6 +68,59 @@ class MeshReader:
 
     def compute_edges(self):
         pass
+
+
+
+class MeshWriter:
+    def __init__(self, mesh_dir, filename):
+        self.mesh_dir = Path(mesh_dir)
+        self.filename = filename
+
+    def write(self, nodes, elems, regions, fibres=None, unit_conversion=1000):
+        """
+        nodes:   (N, 3) float
+        elems:   (M, 4) int for volume tets OR (M, 3) int for surface tris
+        regions: (M,)   int
+        fibres:  (M, 3) float (optional, typically for volume meshes)
+        """
+        self.mesh_dir.mkdir(parents=True, exist_ok=True)
+
+        nodes = np.asarray(nodes, dtype=np.float64)
+        elems = np.asarray(elems, dtype=np.int64)
+        regions = np.asarray(regions, dtype=np.int64).reshape(-1)
+
+        # ---- .pts ----
+        pts_file = self.mesh_dir / f"{self.filename}.pts"
+        nodes_out = (nodes * unit_conversion).astype(np.float32)
+
+        with pts_file.open("w") as f:
+            f.write(f"{nodes_out.shape[0]}\n")
+            for x, y, z in nodes_out:
+                f.write(f"{fmt(x)} {fmt(y)} {fmt(z)}\n")
+
+        # ---- .elem ----
+        elem_file = self.mesh_dir / f"{self.filename}.elem"
+        etype = "Tt" if elems.shape[1] == 4 else "Tr"
+
+        with elem_file.open("w") as f:
+            f.write(f"{elems.shape[0]}\n")
+            if elems.shape[1] == 4:
+                for (n0, n1, n2, n3), r in zip(elems, regions):
+                    f.write(f"{etype} {n0} {n1} {n2} {n3} {r}\n")
+            else:
+                for (n0, n1, n2), r in zip(elems, regions):
+                    f.write(f"{etype} {n0} {n1} {n2} {r}\n")
+
+        # ---- .lon  ----
+        if fibres is not None:
+            lon_file = self.mesh_dir / f"{self.filename}.lon"
+            fibres_out = np.asarray(fibres, dtype=np.float32)
+
+            with lon_file.open("w") as f:
+                f.write(f"{fibres_out.shape[0]}\n")
+                for fx, fy, fz in fibres_out:
+                    f.write(f"{fmt(fx)} {fmt(fy)} {fmt(fz)}\n")
+
 
 if __name__ == "__main__":
     import time

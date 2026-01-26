@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 from torchcor.signalanalysis.signalanalysis.ecg_QS import Ecg
 from torchcor.tools.igbwriter import IGBWriter
+from torchcor.tools.igbreader import IGBReader
 
 
 class Monodomain:
@@ -72,6 +73,8 @@ class Monodomain:
         self.elems = torch.from_numpy(elems).to(dtype=torch.int, device=self.device)
         self.regions = torch.from_numpy(regions).to(dtype=torch.int, device=self.device)
         self.fibres = torch.from_numpy(fibres).to(dtype=self.dtype, device=self.device)
+
+        self.fibres = self.fibres / torch.linalg.norm(self.fibres, dim=1, keepdim=True)
 
         self.stimuli = Stimuli(self.n_nodes, self.device, self.dtype)
         self.conductivity = Conductivity(self.regions, dtype=self.dtype)
@@ -173,6 +176,10 @@ class Monodomain:
             
             ### CG step ###
             u, n_iter, ionic_time, electric_time = self.step(u, t, a_tol, r_tol, max_iter, verbose)
+            # if n_iter >= max_iter:
+            #     print(torch.stack(solution_list, dim=0).min(), torch.stack(solution_list, dim=0).max())
+            #     raise Exception("exceeded max_iter")
+
             n_total_iter += n_iter
             total_ionic_time += ionic_time
             total_electric_time += electric_time
@@ -203,6 +210,7 @@ class Monodomain:
 
         if snapshot_interval < self.T:
             torch.save(torch.stack(solution_list, dim=0).cpu(), self.result_path / "Vm.pt")
+            # print(torch.stack(solution_list, dim=0).min(), torch.stack(solution_list, dim=0).max())
 
         ### print log info to console ###
         if verbose:
@@ -244,7 +252,7 @@ class Monodomain:
         n_solutions = solutions.shape[0]
         for i in range(n_solutions):
             visualization.save_frame(color_values=solutions[i],
-                                     frame_path=self.result_path / f"Vm_vtk/frame_{i}.vtk")
+                                     frame_path=self.result_path / f"pt_vtk/frame_{i}.vtk")
         
 
         ATs = torch.load(self.result_path / "ATs.pt")
@@ -257,7 +265,24 @@ class Monodomain:
         print(f"Saved vtk files in {round(time.time() - start_time, 2)}", flush=True)
 
 
-    def phie_recovery(self, a_tol=1e-5, r_tol=1e-5, max_iter=100):
+    def igb_to_vtk(self, igb_path, step=1):
+        reader = IGBReader()
+        reader.read(igb_path)
+        Vms = torch.from_numpy(reader.data())
+
+        if self.elems.shape[1] == 3:
+            visualization = VTK3DSurface(self.nodes, self.elems)
+        else:
+            visualization = VTK3D(self.nodes, self.elems)
+        
+        n_solutions = Vms.shape[0]
+        for i in range(0, n_solutions, step):
+            visualization.save_frame(color_values=Vms[i],
+                                     frame_path=self.result_path / f"igb_vtk/frame_{i}.vtk")
+        
+
+
+    def phie_recovery(self, a_tol=1e-5, r_tol=1e-5, max_iter=1000):
         Vm = torch.load(self.result_path / "Vm.pt").to(self.device)
 
         if self.elems.shape[1] == 3:

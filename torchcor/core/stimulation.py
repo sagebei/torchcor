@@ -35,6 +35,13 @@ class Stimuli:
         
         return torch.from_numpy(region).to(dtype=torch.long, device=self.device)
     
+    def save_stimulus_region(self, region, vtx_filepath):
+        region = region.astype(np.int64).reshape(-1)
+
+        with Path(vtx_filepath).open("w") as f:
+            f.write(f"{len(region)}\n")
+            f.write("extra\n")
+            np.savetxt(f, region, fmt="%d")
     
     def add(self, vtx_filepath, start, duration, intensity, period=None, count=1):
         if period is None:
