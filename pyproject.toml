@@ -10,17 +10,22 @@ authors = [{ name = "Bei Zhou", email = "bei.zhou@imperial.ac.uk" }]
 readme = "README.md" 
 requires-python = ">=3.10"
 dependencies = [
-    "torch",
-    "matplotlib", 
-    "numpy",       
-    "pygmsh",      
-    "nvidia-ml-py",      
-    "pyvista",     
-    "scipy",
-    "wfdb",
-    "seaborn",
-    "scikit-learn",
-    "pandas"      
+    "torch>=2.0",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "pygmsh>=7.1",
+    "nvidia-ml-py>=12",
+    "pyvista>=0.45",
+    "scipy>=1.13",
+
+    # Critical: pandas 3.0 currently breaks wfdb import
+    "pandas>=2.2.3,<3",
+
+    # Keep wfdb but do not force newer incompatible pandas
+    "wfdb>=4.3.0,<5",
+
+    "seaborn>=0.13",
+    "scikit-learn>=1.4",
 ]
 
 [tool.setuptools]
