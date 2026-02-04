@@ -1,6 +1,6 @@
 from pathlib import Path
 import numpy as np
-np.set_printoptions(precision=15, suppress=False)
+import torch
 
 def fmt(v, decimals=10):
     s = f"{float(v):.{decimals}f}"
@@ -56,7 +56,12 @@ class MeshReader:
         self.regions = data[:, -1]
 
     def read_fibres(self):
-        fibres = np.loadtxt(self.fibre_file, dtype=np.float64, skiprows=1)
+        fibres = np.loadtxt(self.fibre_file, dtype=np.float32, skiprows=1)
+        norms = np.linalg.norm(fibres, axis=1, keepdims=True)
+        
+        mask = norms[:, 0] > 1e-10
+        fibres[mask] /= norms[mask]
+
         self.fibres = fibres
     
     def read(self, unit_conversion=1000):

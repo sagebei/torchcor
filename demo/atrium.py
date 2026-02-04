@@ -45,7 +45,4 @@ simulator.solve(a_tol=1e-5,              # absolute tolerance
                 result_path="./atrium")  # the folder in which the results are saved
 
 simulator.pt_to_vtk()  # generate VTK files 
-# simulator.phie_recovery()
-# simulator.simulated_ECG()
-simulator.pt_to_igb()
 

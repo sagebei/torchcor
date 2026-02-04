@@ -74,8 +74,6 @@ class Monodomain:
         self.regions = torch.from_numpy(regions).to(dtype=torch.int, device=self.device)
         self.fibres = torch.from_numpy(fibres).to(dtype=self.dtype, device=self.device)
 
-        self.fibres = self.fibres / torch.linalg.norm(self.fibres, dim=1, keepdim=True)
-
         self.stimuli = Stimuli(self.n_nodes, self.device, self.dtype)
         self.conductivity = Conductivity(self.regions, dtype=self.dtype)
 
@@ -358,8 +356,21 @@ class Monodomain:
         im.initialise_from_data(header, data)
         im.set_fname(os.path.join(self.result_path, filename))
         im.write_data_to_file()
-        
-        
+    
+    def save_K_matrix(self, filepath="./heart_K.pt"):
+        K = self.K
+        K = K.cpu()
+
+        torch.save(
+            {
+                "crow_indices": K.crow_indices(),
+                "col_indices": K.col_indices(),
+                "values": K.values(),
+                "size": K.size(),
+                "dtype": K.dtype,
+            },
+            filepath,
+        )
 
 
 
