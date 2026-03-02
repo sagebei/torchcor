@@ -70,12 +70,14 @@ class Monodomain:
         
         self.n_nodes = nodes.shape[0]
         self.nodes = torch.from_numpy(nodes).to(dtype=self.dtype, device=self.device)
-        self.elems = torch.from_numpy(elems).to(dtype=torch.int, device=self.device)
-        self.regions = torch.from_numpy(regions).to(dtype=torch.int, device=self.device)
+        self.elems = elems.to_torch(self.device)
+        
+        self.regions = torch.from_numpy(regions).to(dtype=torch.long, device=self.device)
         self.fibres = torch.from_numpy(fibres).to(dtype=self.dtype, device=self.device)
 
         self.stimuli = Stimuli(self.n_nodes, self.device, self.dtype)
         self.conductivity = Conductivity(self.regions, dtype=self.dtype)
+
 
     def add_stimulus(self, vtx_filepath, start, duration, intensity, period=None, count=1):
         if period is None:
@@ -88,10 +90,12 @@ class Monodomain:
     def assemble(self):
         self.sigma_i, self.sigma_e, self.sigma_m = self.conductivity.calculate_sigma(self.fibres)
 
-        if self.elems.shape[1] == 3:
-            matrices = Matrices3DSurface(vertices=self.nodes, triangles=self.elems, device=self.device, dtype=self.dtype)
-        else:
-            matrices = Matrices3D(vertices=self.nodes, tetrahedrons=self.elems, device=self.device, dtype=self.dtype)
+        if (self.elems.Ln is not None) and (self.elems.Tr is not None):
+            matrices = Matrices1D_3DSurface(vertices=self.nodes, elems=self.elems, device=self.device, dtype=self.dtype)
+        elif self.elems.Tr is not None:
+            matrices = Matrices3DSurface(vertices=self.nodes, triangles=self.elems.Tr, device=self.device, dtype=self.dtype)
+        elif self.elems.Tt is not None:
+            matrices = Matrices3D(vertices=self.nodes, tetrahedrons=self.elems.Tt, device=self.device, dtype=self.dtype)
 
         K, M = matrices.assemble_matrices(self.sigma_m)
         
@@ -241,10 +245,10 @@ class Monodomain:
     def pt_to_vtk(self):
         start_time = time.time()
 
-        if self.elems.shape[1] == 3:
-            visualization = VTK3DSurface(self.nodes, self.elems)
-        else:
-            visualization = VTK3D(self.nodes, self.elems)
+        if (self.elems.Ln is None) and (self.elems.Tr is not None):
+            visualization = VTK3DSurface(self.nodes, self.elems.Tr)
+        elif self.elems.Tt is not None:
+            visualization = VTK3D(self.nodes, self.elems.Tt)
         
         solutions = torch.load(self.result_path / "Vm.pt", map_location=torch.device('cpu'))
         n_solutions = solutions.shape[0]
@@ -268,10 +272,10 @@ class Monodomain:
         reader.read(igb_path)
         Vms = torch.from_numpy(reader.data())
 
-        if self.elems.shape[1] == 3:
-            visualization = VTK3DSurface(self.nodes, self.elems)
-        else:
-            visualization = VTK3D(self.nodes, self.elems)
+        if (self.elems.Ln is None) and (self.elems.Tr is not None):
+            visualization = VTK3DSurface(self.nodes, self.elems.Tr)
+        elif self.elems.Tt is not None:
+            visualization = VTK3D(self.nodes, self.elems.Tt)
         
         n_solutions = Vms.shape[0]
         for i in range(0, n_solutions, step):

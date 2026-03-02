@@ -1,6 +1,127 @@
 import torch
 
 
+class Matrices1D_3DSurface:
+    def __init__(self, vertices, elems, device, dtype):
+        self.elems = elems
+        self.matrices_1d = Matrices1D(vertices, elems.Ln, device, dtype)
+        self.matrices_3d = Matrices3DSurface(vertices, elems.Tr, device, dtype)
+
+    def assemble_matrices(self, sigma):
+        K_1d, M_1d = self.matrices_1d.assemble_matrices(sigma[self.elems.Ln_idx])
+        K_3d, M_3d = self.matrices_3d.assemble_matrices(sigma[self.elems.Tr_idx])
+
+        K = K_1d + K_3d
+        M = M_1d + M_3d
+
+        return K.coalesce(), M.coalesce()
+
+
+class Matrices1D:
+    def __init__(self, vertices, lines, device, dtype):
+        """
+        vertices: (N, 2)
+        lines:    (M, 2)
+        """
+        self.vertices = vertices.clone()
+        self.n_vertices = vertices.shape[0]
+        self.lines = lines.clone()
+        self.device = device
+        self.dtype = dtype
+
+    def shape_function_gradients(self):
+        return torch.tensor([[-1.0],
+                             [ 1.0]],
+                             device=self.device,
+                             dtype=self.dtype)
+
+    def jacobian(self, line_coords):
+        # line_coords: (M,2,d)
+        dN_dxi = self.shape_function_gradients()  # (2,1)
+
+        # (M,d,2) @ (2,1) → (M,d,1)
+        J = line_coords.transpose(1, 2) @ dN_dxi
+        return J  # (M,d,1)
+
+    def calculate_measure(self, J_batch):
+        # |J| = element length
+        return torch.linalg.norm(J_batch.squeeze(-1), dim=1)
+
+    def local_mass(self, lengths):
+        Me_template = torch.tensor([[2.0, 1.0],
+                                    [1.0, 2.0]],
+                                    device=self.device,
+                                    dtype=self.dtype)
+
+        return (lengths / 6).unsqueeze(1).unsqueeze(2) * Me_template.unsqueeze(0)
+
+    def local_stiffness(self, sigma, line_coords):
+        J_batch = self.jacobian(line_coords)          # (M,d,1)
+        lengths = self.calculate_measure(J_batch)    # (M,)
+
+        # Inverse Jacobian
+        # For 1D: J is (M,d,1). We treat mapping scalar-wise.
+        # J^T J = |J|^2 so inverse in least squares sense:
+        JT = J_batch.transpose(1, 2)                 # (M,1,d)
+        inv_J = JT / (lengths**2).view(-1,1,1)       # (M,1,d)
+
+        dN_dxi = self.shape_function_gradients()     # (2,1)
+
+        # (2,1) @ (M,1,d) → (M,2,d)
+        dN_dx = dN_dxi @ inv_J
+
+        # K_e = |J| * ∇N sigma ∇N^T
+        Ke_batch = lengths.view(-1,1,1) * \
+                   (dN_dx @ (sigma @ dN_dx.transpose(1,2)))
+
+        return Ke_batch
+
+    def construct_local_matrices(self, sigma):
+        self.vertices = self.vertices.to(self.device)
+        self.lines = self.lines.to(self.device)
+
+        line_coords = self.vertices[self.lines]  # (M,2,d)
+
+        J_batch = self.jacobian(line_coords)
+        lengths = self.calculate_measure(J_batch)
+
+        Me_batch = self.local_mass(lengths)
+        Ke_batch = self.local_stiffness(sigma, line_coords)
+
+        return Me_batch, Ke_batch
+
+    def assemble_matrices(self, sigma):
+        Me_batch, Ke_batch = self.construct_local_matrices(sigma)
+
+        rows, cols, K_vals, M_vals = [], [], [], []
+
+        for i in range(2):
+            for j in range(2):
+                rows.extend(self.lines[:, i].tolist())
+                cols.extend(self.lines[:, j].tolist())
+                K_vals.extend(Ke_batch[:, i, j].tolist())
+                M_vals.extend(Me_batch[:, i, j].tolist())
+
+        K = torch.sparse_coo_tensor(
+            indices=[rows, cols],
+            values=K_vals,
+            size=(self.n_vertices, self.n_vertices),
+            device=self.device,
+            dtype=self.dtype
+        ).coalesce()
+
+        M = torch.sparse_coo_tensor(
+            indices=[rows, cols],
+            values=M_vals,
+            size=(self.n_vertices, self.n_vertices),
+            device=self.device,
+            dtype=self.dtype
+        ).coalesce()
+
+        return K, M
+
+
+
 class Matrices2D:
     def __init__(self, vertices, triangles, device, dtype):
         self.vertices = vertices.clone()  # (12100, 2)
@@ -8,7 +129,6 @@ class Matrices2D:
         self.triangles = triangles.clone()  # (23762, 3)
         self.device = device
         self.dtype = dtype
-
 
     def shape_function_gradients(self):
         # Gradients of shape functions in the reference element (master triangle) (3, 2)
