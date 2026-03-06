@@ -20,7 +20,7 @@ ionic_model.tau_out = 1.5
 ionic_model.tau_open = 105.0
 ionic_model.tau_close = 185.0
 
-case_name = "Case_10"
+case_name = "Case_18"
 mesh_dir = Path("/home/bzhou6/Data/atrium/") / case_name
 
 # 1. Initialise the Mondomain model
@@ -40,7 +40,7 @@ simulator.solve(a_tol=1e-5,              # absolute tolerance
                 max_iter=100,            # maximum number of iterations for each CG calculation
                 calculate_AT_RT=True,    # keep track of local activation time (LAT)
                 linear_guess=True,
-                snapshot_interval=1,     # save the soluation after every 1 ms
+                snapshot_interval=10,     # save the soluation after every 1 ms
                 verbose=True,
                 result_path="./atrium")  # the folder in which the results are saved
 

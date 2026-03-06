@@ -1,38 +1,56 @@
 from pathlib import Path
 import numpy as np
 import torch
+from dataclasses import dataclass
+from typing import Optional
 
 def fmt(v, decimals=10):
     s = f"{float(v):.{decimals}f}"
     return s.rstrip("0").rstrip(".")
 
+def region_node_idx(elems, region_ids):
+    region_ids = torch.tensor(region_ids, dtype=torch.long, device=elems.device)
+    nodes_idx = []
+
+    if elems.Ln.data is not None:
+        mask = torch.isin(elems.Ln.region, region_ids)
+        nodes_idx.append(elems.Ln.data[mask].reshape(-1))
+    if elems.Tr.data is not None:
+        mask = torch.isin(elems.Tr.region, region_ids)
+        nodes_idx.append(elems.Tr.data[mask].reshape(-1))
+    if elems.Tt.data is not None:
+        mask = torch.isin(elems.Tt.region, region_ids)
+        nodes_idx.append(elems.Tt.data[mask].reshape(-1))
+
+    return torch.unique(torch.cat(nodes_idx), sorted=True)
+
+
+@dataclass
+class Element:
+    data: Optional[np.ndarray] = None
+    idx: Optional[np.ndarray] = None
+    region: Optional[np.ndarray] = None
+
+    def to_torch(self, device: torch.device):
+        if self.data is not None:
+            self.data = torch.as_tensor(self.data, dtype=torch.long, device=device)
+            self.idx = torch.as_tensor(self.idx, dtype=torch.long, device=device)
+            self.region = torch.as_tensor(self.region, dtype=torch.long, device=device)
+
 
 class Elems:
     def __init__(self):
-        self.Ln = None
-        self.Ln_idx = None
+        self.device = None
+        self.Ln = Element()
+        self.Tr = Element()
+        self.Tt = Element()
 
-        self.Tr = None
-        self.Tr_idx = None
+    def to_torch(self, device: torch.device):
+        self.device = device
 
-        self.Tt = None
-        self.Tt_idx = None
-
-    def to_torch(self, device):
-        if self.Ln is not None:
-            self.Ln = torch.from_numpy(self.Ln).to(dtype=torch.long, device=device)
-        if self.Ln_idx is not None:
-            self.Ln_idx = torch.from_numpy(self.Ln_idx).to(dtype=torch.long, device=device)
-
-        if self.Tr is not None:
-            self.Tr = torch.from_numpy(self.Tr).to(dtype=torch.long, device=device)
-        if self.Tr_idx is not None:
-            self.Tr_idx = torch.from_numpy(self.Tr_idx).to(dtype=torch.long, device=device)
-
-        if self.Tt is not None:
-            self.Tt = torch.from_numpy(self.Tt).to(dtype=torch.long, device=device)
-        if self.Tt_idx is not None:
-            self.Tt_idx = torch.from_numpy(self.Tt_idx).to(dtype=torch.long, device=device)
+        self.Ln.to_torch(device)
+        self.Tr.to_torch(device)
+        self.Tt.to_torch(device)
 
         return self
 
@@ -54,7 +72,6 @@ class MeshReader:
 
         self.nodes: np.array = None
         self.elems = Elems()
-        self.elems_index = Elems()
         self.regions: np.array = None
         self.fibres: np.array = None
 
@@ -106,14 +123,17 @@ class MeshReader:
             if mask.any():
                 indices = np.where(mask)[0]
                 if etype == "Ln":
-                    self.elems.Ln = np.array([elem_nodes[i] for i in indices], dtype=int)
-                    self.elems.Ln_idx = indices
+                    self.elems.Ln.data = np.array([elem_nodes[i] for i in indices], dtype=int)
+                    self.elems.Ln.idx = indices
+                    self.elems.Ln.region = self.regions[indices]
                 elif etype == "Tr":
-                    self.elems.Tr = np.array([elem_nodes[i] for i in indices], dtype=int)
-                    self.elems.Tr_idx = indices
+                    self.elems.Tr.data = np.array([elem_nodes[i] for i in indices], dtype=int)
+                    self.elems.Tr.idx = indices
+                    self.elems.Tr.region = self.regions[indices]
                 elif etype == "Tt":
-                    self.elems.Tt = np.array([elem_nodes[i] for i in indices], dtype=int)
-                    self.elems.Tt_idx = indices
+                    self.elems.Tt.data = np.array([elem_nodes[i] for i in indices], dtype=int)
+                    self.elems.Tt.idx = indices
+                    self.elems.Tt.region = self.regions[indices]
 
 
     def read_fibres(self):
@@ -188,6 +208,10 @@ class MeshWriter:
                     f.write(f"{fmt(fx)} {fmt(fy)} {fmt(fz)}\n")
 
 
+
+
+
+
 if __name__ == "__main__":
     import time
     start_time = time.time()
@@ -198,4 +222,4 @@ if __name__ == "__main__":
     reader.read_fibres()
     print(time.time() - start_time)
 
-    print(reader.nodes[0], reader.elems.Tr[0], reader.regions[0], reader.fibres[0])
+    # print(reader.nodes[0], reader.elems.Tr[0], reader.regions[0], reader.fibres[0])

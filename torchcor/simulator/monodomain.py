@@ -15,10 +15,14 @@ import pandas as pd
 from torchcor.signalanalysis.signalanalysis.ecg_QS import Ecg
 from torchcor.tools.igbwriter import IGBWriter
 from torchcor.tools.igbreader import IGBReader
+from torchcor.core.mesh import region_node_idx
+
+
+
 
 
 class Monodomain:
-    def __init__(self, ionic_model, T, dt, device=None, dtype=None):
+    def __init__(self, ionic_models, T, dt, device=None, dtype=None):
         self.device = tc.get_device() if device is None else device
         self.dtype = torch.float64 if dtype is None else dtype
         
@@ -26,9 +30,10 @@ class Monodomain:
         self.dt = dt  # ms
         self.nt = int(T / dt)
 
-        self.ionic_model = ionic_model
-        self.ionic_model.device = self.device
-        self.ionic_model.dtype = self.dtype
+        self.ionic_models = ionic_models
+        for im in self.ionic_models:
+            im.device = self.device
+            im.dtype = self.dtype
 
         self.pcd = None
         self.cg = None
@@ -37,7 +42,8 @@ class Monodomain:
         self.nodes = None
         self.elems = None
         self.fibres = None
-        self.region_ids = None
+
+        self.unique_regions = None
 
         self.stimuli = None
         self.conductivity = None
@@ -73,29 +79,42 @@ class Monodomain:
         self.elems = elems.to_torch(self.device)
         
         self.regions = torch.from_numpy(regions).to(dtype=torch.long, device=self.device)
+        self.unique_regions = torch.unique(self.regions).tolist()
         self.fibres = torch.from_numpy(fibres).to(dtype=self.dtype, device=self.device)
 
         self.stimuli = Stimuli(self.n_nodes, self.device, self.dtype)
         self.conductivity = Conductivity(self.regions, dtype=self.dtype)
+        
+        uncovered_regions = self.unique_regions.copy()
+        for im in self.ionic_models:
+            if len(uncovered_regions) == 0:
+                self.ionic_models
 
-
+            if im.region_ids is None:
+                im.region_ids = uncovered_regions.copy()
+            uncovered_regions = [id for id in uncovered_regions if id not in set(im.region_ids)]
+            
+            im.node_indices = region_node_idx(self.elems, im.region_ids)
+    
     def add_stimulus(self, vtx_filepath, start, duration, intensity, period=None, count=1):
         if period is None:
             period = self.T
         self.stimuli.add(vtx_filepath, start, duration, intensity, period, count)
 
     def add_conductivity(self, region_ids, il, it, el=None, et=None):
+        if region_ids is None:
+            region_ids = self.unique_regions.copy()
         self.conductivity.add(region_ids, il, it, el, et)
 
     def assemble(self):
         self.sigma_i, self.sigma_e, self.sigma_m = self.conductivity.calculate_sigma(self.fibres)
 
-        if (self.elems.Ln is not None) and (self.elems.Tr is not None):
+        if (self.elems.Ln.data is not None) and (self.elems.Tr.data is not None):
             matrices = Matrices1D_3DSurface(vertices=self.nodes, elems=self.elems, device=self.device, dtype=self.dtype)
-        elif self.elems.Tr is not None:
-            matrices = Matrices3DSurface(vertices=self.nodes, triangles=self.elems.Tr, device=self.device, dtype=self.dtype)
-        elif self.elems.Tt is not None:
-            matrices = Matrices3D(vertices=self.nodes, tetrahedrons=self.elems.Tt, device=self.device, dtype=self.dtype)
+        elif self.elems.Tr.data is not None:
+            matrices = Matrices3DSurface(vertices=self.nodes, triangles=self.elems.Tr.data, device=self.device, dtype=self.dtype)
+        elif self.elems.Tt.data is not None:
+            matrices = Matrices3D(vertices=self.nodes, tetrahedrons=self.elems.Tt.data, device=self.device, dtype=self.dtype)
 
         K, M = matrices.assemble_matrices(self.sigma_m)
         
@@ -124,8 +143,11 @@ class Monodomain:
             start_time = time.time()
 
         ### ionic ###
-        du = self.ionic_model.differentiate(u) / 100
-        b = u * self.Cm + self.dt * du
+        b = u.clone()
+        for im in self.ionic_models:
+            idx = im.node_indices
+            du = im.differentiate(u[idx]) / 100
+            b[idx] = u[idx]* self.Cm + self.dt * du
         #############
 
         if verbose:
@@ -150,20 +172,22 @@ class Monodomain:
 
         return u, n_iter, ionic_time, electric_time
 
-    def solve(self, a_tol, r_tol, max_iter, calculate_AT_RT=True, linear_guess=True, snapshot_interval=1, verbose=True, result_path=None):
+    
+    def solve(self, a_tol, r_tol, max_iter, linear_guess=True, snapshot_interval=5, verbose=True, result_path=None):
         self.result_path = Path(result_path)
         self.result_path.mkdir(parents=True, exist_ok=True)
+        self.snapshot_interval = snapshot_interval
 
         self.assemble()
         
-        u = self.ionic_model.initialize(self.n_nodes)
+        u = torch.zeros((self.n_nodes), dtype=self.dtype, device=self.device)
+        for im in self.ionic_models:
+            u_im = im.initialize(im.node_indices.shape[0])
+            u[im.node_indices] = u_im.clone()
+
         u_initial = u.clone()
         self.cg.initialize(x=u, linear_guess=linear_guess)
         ts_per_frame = int(snapshot_interval / self.dt)
-    
-        if calculate_AT_RT:
-            activation_time = torch.ones_like(u_initial) * -1
-            repolarization_time = torch.ones_like(u_initial) * -1
 
         t = 0
         solving_time = time.time()
@@ -178,19 +202,13 @@ class Monodomain:
             
             ### CG step ###
             u, n_iter, ionic_time, electric_time = self.step(u, t, a_tol, r_tol, max_iter, verbose)
-            # if n_iter >= max_iter:
-            #     print(torch.stack(solution_list, dim=0).min(), torch.stack(solution_list, dim=0).max())
-            #     raise Exception("exceeded max_iter")
+            if n_iter >= max_iter:
+                raise Exception("exceeded max_iter")
 
             n_total_iter += n_iter
             total_ionic_time += ionic_time
             total_electric_time += electric_time
-            
-            ### calculate AT and RT ###
-            if calculate_AT_RT:
-                activation_time[(u > 0) & (activation_time == -1)] = t
-                repolarization_time[(activation_time > 0) & (repolarization_time == -1) & (u < -70)] = t
-            
+    
             ### keep track of GPU usage ###
             if n % ts_per_frame == 0:
                 solution_list.append(u.clone())
@@ -200,25 +218,16 @@ class Monodomain:
                     gpu_memory_list.append(nvmlDeviceGetMemoryInfo(self.gpu_handle).used / 1e9)
                 
                 if verbose and snapshot_interval != self.T:
-                    print(f"t: {round(t, 1)}/{self.T}", 
-                          f"Time elapsed:", round(time.time() - solving_time, 2),
-                          f"Total CG iter:", n_total_iter,
+                    print(f"t: {round(t, 1)}/{self.T} |", 
+                          f"Time elapsed: {round(time.time() - solving_time, 1)} |", 
+                          f"CG iter:", n_total_iter,
                           flush=True)
-
-        ### save AT, RT, and solutions to disk ###
-        if calculate_AT_RT:
-            torch.save(activation_time.cpu(), self.result_path / "ATs.pt")
-            torch.save(repolarization_time.cpu(), self.result_path / "RTs.pt")
-
-        if snapshot_interval < self.T:
-            torch.save(torch.stack(solution_list, dim=0).cpu(), self.result_path / "Vm.pt")
-            # print(torch.stack(solution_list, dim=0).min(), torch.stack(solution_list, dim=0).max())
+                n_total_iter = 0
 
         ### print log info to console ###
         if verbose:
             if torch.cuda.is_available():
-                print(self.ionic_model.name,
-                    self.n_nodes, 
+                print(self.n_nodes, 
                     round(time.time() - solving_time, 2),
                     round(total_ionic_time, 2),
                     round(total_electric_time, 2),
@@ -234,37 +243,126 @@ class Monodomain:
                     round(total_electric_time, 2),
                     n_total_iter,
                     flush=True)
-            
-            if calculate_AT_RT:
-                print("ATs: ", activation_time.cpu().min().item(), activation_time.cpu().max().item(), flush=True)
-                print("RTs: ", repolarization_time.cpu().min().item(), repolarization_time.cpu().max().item(), flush=True)
-
-        return n_total_iter
+                
+        ### save Vm, AT, RT to disk ###
+        Vm = torch.stack(solution_list, dim=0)
+        return Vm
 
 
-    def pt_to_vtk(self):
-        start_time = time.time()
+    # def compute_activation_map(self, Vm: torch.Tensor, snapshot_interval: float, threshold=10) -> torch.Tensor:
+    #     dVdt = torch.diff(Vm, dim=0) / snapshot_interval
+    #     dVdt = dVdt * (dVdt > 0)
+    #     peak_idx = torch.argmax(dVdt, dim=0) 
+    #     activation_times = peak_idx.float() * snapshot_interval
+    #     max_dVdt, _ = dVdt.max(dim=0)                     
+    #     activation_times[max_dVdt < threshold] = float('nan')
 
-        if (self.elems.Ln is None) and (self.elems.Tr is not None):
-            visualization = VTK3DSurface(self.nodes, self.elems.Tr)
-        elif self.elems.Tt is not None:
-            visualization = VTK3D(self.nodes, self.elems.Tt)
+    #     return activation_times
+
+
+    def compute_activation_map(
+        self,
+        Vm: torch.Tensor,
+        snapshot_interval: float = 1,
+        threshold: float = -10.0,
+    ) -> torch.Tensor:
+        T, N = Vm.shape
+        above = Vm > threshold                                   # (T, N)
+        crossings = above[1:].float() - above[:-1].float()      # (T-1, N)
+        ascending = crossings > 0                                # (T-1, N)
+        has_crossing = ascending.any(dim=0)                      # (N,)
+        first_crossing = torch.argmax(ascending.long(), dim=0)   # (N,)
+        ATs = first_crossing.float() * snapshot_interval
+        ATs[~has_crossing] = float('nan')
+
+        torch.save(ATs.cpu(), self.result_path / "ATs.pt")
         
-        solutions = torch.load(self.result_path / "Vm.pt", map_location=torch.device('cpu'))
-        n_solutions = solutions.shape[0]
-        for i in range(n_solutions):
-            visualization.save_frame(color_values=solutions[i],
-                                     frame_path=self.result_path / f"pt_vtk/frame_{i}.vtk")
+
+        return ATs
+
+
+    def compute_repolarization_map(
+        self,
+        Vm: torch.Tensor,
+        snapshot_interval: float = 1,
+        threshold: float = -70.0,
+        search_after: torch.Tensor = None,
+        first: bool = True,
+    ) -> torch.Tensor:
+        T, N = Vm.shape
+
+        above = Vm > threshold                                   # (T, N)
+        crossings = above[:-1].float() - above[1:].float()      # (T-1, N)
+        descending = crossings > 0                               # (T-1, N)
+
+        if search_after is not None:
+            never_activated = torch.isnan(search_after)
+            act_idx = (search_after / snapshot_interval).long().clamp(0, T - 2)
+            act_idx[never_activated] = T - 1
+            time_idx = torch.arange(T - 1, device=Vm.device).unsqueeze(1)
+            descending = descending & (time_idx >= act_idx.unsqueeze(0))
+            descending[:, never_activated] = False
+
+        has_crossing = descending.any(dim=0)                     # (N,)
+
+        if first:
+            crossing = torch.argmax(descending.long(), dim=0)
+        else:
+            crossing = (T - 2) - torch.argmax(descending.flip(0).long(), dim=0)
+
+        RTs = (crossing.float() + 1) * snapshot_interval
+        RTs[~has_crossing] = float('nan')
+
+        if first:
+            torch.save(RTs.cpu(), self.result_path / "RTs.pt")
+        else:
+            torch.save(RTs.cpu(), self.result_path / "RTs_last.pt")
         
+        return RTs
 
-        ATs = torch.load(self.result_path / "ATs.pt")
-        visualization.save_frame(color_values=ATs,
-                                 frame_path=self.result_path / "ATs.vtk")
-        RTs = torch.load(self.result_path / "RTs.pt")
-        visualization.save_frame(color_values=RTs,
-                                 frame_path=self.result_path / "RTs.vtk")
+    def save_vm(self, Vm):
+        torch.save(Vm.cpu(), self.result_path / "Vm.pt")
 
-        print(f"Saved vtk files in {round(time.time() - start_time, 2)}", flush=True)
+    def vm_to_vtk(self, Vm=None, step=1):
+        if (self.elems.Ln.data is not None) and (self.elems.Tr.data is not None):
+            visualization = VTK3DSurface(self.nodes, self.elems.Tr.data)
+        elif self.elems.Tt.data is not None:
+            visualization = VTK3D(self.nodes, self.elems.Tt.data)
+        
+        if Vm is not None:
+            Vm = Vm.cpu().numpy().astype(np.float32)
+            n_solutions = Vm.shape[0]
+            for i in range(0, n_solutions, step):
+                visualization.save_frame(color_values=Vm[i],
+                                        frame_path=self.result_path / f"Vm_vtk/ms_{i * self.snapshot_interval}.vtk")
+
+        ATS_path = self.result_path / "ATs.pt"
+        if ATS_path.exists():
+            ATs = torch.load(ATS_path)
+            visualization.save_frame(color_values=ATs,
+                                    frame_path=self.result_path / "ATs.vtk")
+        
+        RTs_path = self.result_path / "RTs.pt"
+        if RTs_path.exists():
+            RTs = torch.load(RTs_path)
+            visualization.save_frame(color_values=RTs,
+                                    frame_path=self.result_path / "RTs.vtk")
+
+
+    def vm_to_igb(self, Vm, filename: str = "Vm.igb"):
+        ''' This function converts the output to an igb file format
+        '''
+        data = Vm.cpu().numpy().astype(np.float32)  #ntXnx
+        
+        header = {'x':self.n_nodes, 'y':1, 'z':1,
+                  't': data.shape[0], 
+                  'org_t': 0.0, 
+                  'Tend': self.T}
+        
+        im = IGBWriter()
+        im.initialise_from_data(header, data)
+        im.set_fname(os.path.join(self.result_path, filename))
+        im.write_data_to_file()
 
 
     def igb_to_vtk(self, igb_path, step=1):
@@ -282,7 +380,6 @@ class Monodomain:
             visualization.save_frame(color_values=Vms[i],
                                      frame_path=self.result_path / f"igb_vtk/frame_{i}.vtk")
         
-
 
     def phie_recovery(self, a_tol=1e-5, r_tol=1e-5, max_iter=1000):
         Vm = torch.load(self.result_path / "Vm.pt").to(self.device)
@@ -344,22 +441,6 @@ class Monodomain:
         ECGspd = pd.DataFrame(ECGs.data)
         print(ECGspd.columns)
         ECGspd.to_csv(self.result_path / 'simulated_filtered.dat', sep=' ', header=False, mode='w')
-        
-
-    def pt_to_igb(self, filename: str = "vm.igb"):
-        ''' This function converts the output to an igb file format
-        '''
-        data = torch.load(self.result_path / "Vm.pt", map_location=torch.device('cpu')).numpy().astype(np.float32)  #ntXnx
-        
-        header = {'x':self.n_nodes, 'y':1, 'z':1,
-                  't': data.shape[0], 
-                  'org_t': 0.0, 
-                  'Tend': self.T}
-        
-        im = IGBWriter()
-        im.initialise_from_data(header, data)
-        im.set_fname(os.path.join(self.result_path, filename))
-        im.write_data_to_file()
     
     def save_K_matrix(self, filepath="./heart_K.pt"):
         K = self.K

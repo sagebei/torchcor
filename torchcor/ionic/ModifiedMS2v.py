@@ -1,11 +1,18 @@
 import torch
 import torchcor as tc
+from typing import Optional, List
 
 @torch.jit.script
 class ModifiedMS2v:
-    def __init__(self, dt: float, device: torch.device=tc.get_device(), dtype: torch.dtype=torch.float64):
+    def __init__(self, 
+                 dt: float, 
+                 region_ids: Optional[List[int]] = None, 
+                 device: torch.device = torch.device("cpu"),
+                 dtype: torch.dtype = torch.float64):
         self.name = "ModifiedMS2v"
         self.dt = dt
+        self.region_ids = region_ids
+        self.node_indices = torch.tensor([0])
         self.device = device
         self.dtype = dtype
 

@@ -4,12 +4,12 @@ import torch
 class Matrices1D_3DSurface:
     def __init__(self, vertices, elems, device, dtype):
         self.elems = elems
-        self.matrices_1d = Matrices1D(vertices, elems.Ln, device, dtype)
-        self.matrices_3d = Matrices3DSurface(vertices, elems.Tr, device, dtype)
+        self.matrices_1d = Matrices1D(vertices, elems.Ln.data, device, dtype)
+        self.matrices_3d = Matrices3DSurface(vertices, elems.Tr.data, device, dtype)
 
     def assemble_matrices(self, sigma):
-        K_1d, M_1d = self.matrices_1d.assemble_matrices(sigma[self.elems.Ln_idx])
-        K_3d, M_3d = self.matrices_3d.assemble_matrices(sigma[self.elems.Tr_idx])
+        K_1d, M_1d = self.matrices_1d.assemble_matrices(sigma[self.elems.Ln.idx])
+        K_3d, M_3d = self.matrices_3d.assemble_matrices(sigma[self.elems.Tr.idx])
 
         K = K_1d + K_3d
         M = M_1d + M_3d
