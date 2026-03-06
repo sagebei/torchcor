@@ -1,5 +1,3 @@
-# TorchCor
-
 <p align="center">
   <img src="docs/logo.png" alt="TorchCor logo" width="150"/>
 </p>
