@@ -1,13 +1,13 @@
 # TorchCor
 
 <p align="center">
-  <img src="docs/logo.png" alt="TorchCor logo" width="120"/>
+  <img src="docs/logo.png" alt="TorchCor logo" width="150"/>
 </p>
 
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.10+-blue">
-  <img src="https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?logo=pytorch">
+  <img src="https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?logo=pytorch&logoColor=white">
   <img src="https://img.shields.io/badge/CUDA-enabled-76B900?logo=nvidia">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg">
 </p>
