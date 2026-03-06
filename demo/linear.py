@@ -4,8 +4,8 @@ from torchcor.ionic import CourtemancheRamirezNattel
 from pathlib import Path
 
 tc.set_device("cuda:0")
-dtype = tc.float32
-simulation_time = 500
+dtype = tc.float64
+simulation_time = 6000
 dt = 0.02
 
 im1 = CourtemancheRamirezNattel(dt, region_ids=[0], dtype=dtype)
@@ -48,8 +48,8 @@ im5.GCaL *= 0.22
 im5.GK1 *= 2
 im5.factorGKur *= 1.
 
-case_name = "Mesh_12928433"
-mesh_dir = Path("/home/bzhou6/Data/") / case_name
+
+mesh_dir = Path("/home/bzhou6/Data/Mesh_12928433") 
 
 # im2, im3, im4, im5
 simulator = Monodomain(ionic_models=[im1, im2, im3, im4, im5], T=simulation_time, dt=dt, dtype=dtype)
@@ -87,8 +87,8 @@ Vm = simulator.solve(a_tol=1e-4,
                      verbose=True,
                      result_path="./linear")  
 
-simulator.save_vm(Vm)
 
+# POSTPROCESSING: 
 ATs = simulator.compute_activation_map(Vm=Vm, 
                                        snapshot_interval=snapshot_interval, 
                                        threshold=-10)

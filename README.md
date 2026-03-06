@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="TorchCor logo" width="150"/>
+  <img src="docs/logo.png" alt="TorchCor logo" width="160"/>
 </p>
 
 

@@ -227,24 +227,27 @@ class Monodomain:
         ### print log info to console ###
         if verbose:
             if torch.cuda.is_available():
-                print(self.n_nodes, 
-                    round(time.time() - solving_time, 2),
-                    round(total_ionic_time, 2),
-                    round(total_electric_time, 2),
-                    n_total_iter,
-                    f"{round(sum(gpu_utilisation_list)/len(gpu_utilisation_list), 2)}",
-                    f"{round(sum(gpu_memory_list)/len(gpu_memory_list), 2)}",
+                total_time = time.time() - solving_time
+                gpu_util = sum(gpu_utilisation_list) / len(gpu_utilisation_list)
+                gpu_mem = sum(gpu_memory_list) / len(gpu_memory_list)
+
+                print(
+                    f"nodes: {self.n_nodes} | "
+                    f"total_time: {total_time:.2f}s | "
+                    f"ionic_time: {total_ionic_time:.2f}s | "
+                    f"electric_time: {total_electric_time:.2f}s | "
+                    f"gpu_util: {gpu_util:.2f}% | "
+                    f"gpu_mem: {gpu_mem:.2f}GB",
                     flush=True)
             else:
-                print(self.ionic_model.name,
-                    self.n_nodes, 
-                    round(time.time() - solving_time, 2),
-                    round(total_ionic_time, 2),
-                    round(total_electric_time, 2),
-                    n_total_iter,
+                total_time = time.time() - solving_time
+                print(
+                    f"nodes: {self.n_nodes} | "
+                    f"total_time: {total_time:.2f}s | "
+                    f"ionic_time: {total_ionic_time:.2f}s | "
+                    f"electric_time: {total_electric_time:.2f}s",
                     flush=True)
-                
-        ### save Vm, AT, RT to disk ###
+
         Vm = torch.stack(solution_list, dim=0)
         return Vm
 
@@ -324,7 +327,7 @@ class Monodomain:
         torch.save(Vm.cpu(), self.result_path / "Vm.pt")
 
     def vm_to_vtk(self, Vm=None, step=1):
-        if (self.elems.Ln.data is not None) and (self.elems.Tr.data is not None):
+        if self.elems.Tr.data is not None:
             visualization = VTK3DSurface(self.nodes, self.elems.Tr.data)
         elif self.elems.Tt.data is not None:
             visualization = VTK3D(self.nodes, self.elems.Tt.data)

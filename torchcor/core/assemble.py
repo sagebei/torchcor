@@ -13,7 +13,7 @@ class Matrices1D_3DSurface:
 
         K = K_1d + K_3d
         M = M_1d + M_3d
-
+        
         return K.coalesce(), M.coalesce()
 
 
