@@ -53,6 +53,16 @@ class Elems:
         self.Tt.to_torch(device)
 
         return self
+    
+    def elems_num(self):
+        total = 0
+        if self.Ln.data is not None:
+            total += self.Ln.data.shape[0]
+        if self.Tr.data is not None:
+            total += self.Ln.data.shape[0]
+        if self.Tt.data is not None:
+            total += self.Ln.data.shape[0]
+        return total
 
 class MeshReader:
     def __init__(self, mesh_dir: str):
@@ -186,16 +196,17 @@ class MeshWriter:
 
         # ---- .elem ----
         elem_file = self.mesh_dir / f"{self.filename}.elem"
-        etype = "Tt" if elems.shape[1] == 4 else "Tr"
-
         with elem_file.open("w") as f:
-            f.write(f"{elems.shape[0]}\n")
-            if elems.shape[1] == 4:
-                for (n0, n1, n2, n3), r in zip(elems, regions):
-                    f.write(f"{etype} {n0} {n1} {n2} {n3} {r}\n")
-            else:
-                for (n0, n1, n2), r in zip(elems, regions):
-                    f.write(f"{etype} {n0} {n1} {n2} {r}\n")
+            f.write(f"{elems.elems_num()}\n")
+            if elems.Tt.data is not None:
+                for (n0, n1, n2, n3), r in zip(elems.Tt.data, elems.Tt.region):
+                    f.write(f"Tt {n0} {n1} {n2} {n3} {r}\n")
+            if elems.Tr.data is not None:
+                for (n0, n1, n2), r in zip(elems.Tr.data, elems.Tr.region):
+                    f.write(f"Tr {n0} {n1} {n2} {r}\n")
+            if elems.Ln.data is not None:
+                for (n0, n1), r in zip(elems.Ln.data, elems.Ln.region):
+                    f.write(f"Ln {n0} {n1} {r}\n")
 
         # ---- .lon  ----
         if fibres is not None:
