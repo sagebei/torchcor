@@ -20,8 +20,8 @@ im.tau_out = 1.5
 im.tau_open = 105.0
 im.tau_close = 185.0
 
-case_name = "Case_18"
-mesh_dir = Path("/home/bzhou6/Data/atrium/") / case_name
+case_name = "./Case_18"
+mesh_dir = Path("./") / case_name
 
 # 1. Initialise the Mondomain model
 simulator = Monodomain(ionic_models=[im], T=simulation_time, dt=dt, dtype=dtype)
@@ -43,7 +43,7 @@ Vm = simulator.solve(a_tol=1e-5,              # absolute tolerance
                      max_iter=100,            # maximum number of iterations for each CG calculation
                      snapshot_interval=snapshot_interval,     # save the soluation after every 1 ms
                      verbose=True,
-                     result_path="./atrium")  # the folder in which the results are saved
+                     result_path="./Case_10_results")  # the folder in which the results are saved
 
 # POSTPROCESSING: 
 ATs = simulator.compute_activation_map(Vm=Vm, 
