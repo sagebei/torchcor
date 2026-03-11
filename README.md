@@ -125,6 +125,18 @@ Vm = simulator.solve(a_tol=1e-5,              # absolute tolerance
                      snapshot_interval=snapshot_interval,     # save the soluation after every 1 ms
                      verbose=True,
                      result_path="./biventricle")  # the folder in which the results are saved
+
+# POSTPROCESSING: 
+ATs = simulator.compute_activation_map(Vm=Vm, 
+                                       snapshot_interval=snapshot_interval, 
+                                       threshold=0)
+print("ATs: ", ATs.min().item(), ATs.cpu().max().item(), flush=True)
+RTs = simulator.compute_repolarization_map(Vm=Vm, 
+                                           snapshot_interval=snapshot_interval, 
+                                           threshold=-70)
+print("RTs: ", RTs.min().item(), RTs.cpu().max().item(), flush=True)
+
+simulator.vm_to_vtk(Vm=Vm, step=10)
 ```
 
 ## 📦 Installation
