@@ -5,13 +5,13 @@ from pathlib import Path
 
 # Specify the GPU device for running the simulation
 tc.set_device("cuda:0")
-dtype = tc.float64
+dtype = tc.float32
 # The total simulation duration (ms)
 simulation_time = 500
-dt = 0.01
+dt = 0.05
 
 home_dir = Path.home()
-mesh_dir = home_dir / "Data/ventricle/Case_1"
+mesh_dir = Path(r"C:\Users\bulli\cardiac_data\ventricle\Case_1")
 # Load in the ionic model. Here we use TenTussherPanfilov for the simulation on bi-ventricle
 im = TenTusscherPanfilov(cell_type="ENDO", dt=dt, dtype=dtype)
 # 1. Initialise the Mondomain model
