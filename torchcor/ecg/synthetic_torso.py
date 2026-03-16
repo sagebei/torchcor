@@ -140,6 +140,14 @@ def _generate_mesh(
     tets      = tets[inside]
     centroids = centroids[inside]
 
+    # --- Remove degenerate (near-zero-volume) tetrahedra ---
+    v = nodes[tets]                              # (M, 4, 3)
+    e1, e2, e3 = v[:,1]-v[:,0], v[:,2]-v[:,0], v[:,3]-v[:,0]
+    vols = np.abs(np.einsum("mi,mi->m", e1, np.cross(e2, e3))) / 6.0
+    vol_thresh = np.percentile(vols, 1)          # drop bottom 1 %
+    tets      = tets[vols > vol_thresh]
+    centroids = centroids[vols > vol_thresh]
+
     # --- Tag heart elements ---
     in_heart = _in_ellipsoid(centroids, _HCX, _HCY, _HCZ, _HA, _HB, _HC)
     regions  = np.ones(len(tets), dtype=np.int64)
