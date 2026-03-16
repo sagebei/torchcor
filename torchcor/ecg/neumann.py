@@ -60,7 +60,7 @@ class LeadField:
         self.heart_tags.extend(region_ids)
         self.heart_conductivity.add(region_ids, il, it, el, et)
 
-    def assemable(self):
+    def assemble(self):
         """
         Assemble torso Laplace stiffness and heart intracellular stiffness.
         """
@@ -68,13 +68,13 @@ class LeadField:
 
         torso_mats = Matrices3D(vertices=self.torso_nodes, tetrahedrons=self.torso_elems, device=self.device, dtype=self.dtype)
         heart_mask = torch.isin(self.torso_regions, torch.tensor(self.heart_tags, device=self.device, dtype=torch.long))
-        
-        self.torso_sigma[heart_mask] = self.sigma_i
+
+        self.torso_sigma[heart_mask] = self.sigma_i + self.sigma_e
         K_torso, _ = torso_mats.assemble_matrices(self.torso_sigma)
         self.K_torso = K_torso.to_sparse_csr()
 
         heart_mats = Matrices3D(vertices=self.heart_nodes, tetrahedrons=self.heart_elems, device=self.device, dtype=self.dtype)
-        K_heart, _ = heart_mats.assemble_matrices(self.sigma_i + self.sigma_e)
+        K_heart, _ = heart_mats.assemble_matrices(self.sigma_i)
         self.K_heart = K_heart.to_sparse_csr()
 
     def project_phi_to_heart(self, phi_torso: Tensor) -> Tensor:
@@ -271,7 +271,7 @@ if __name__ == "__main__":
     lf.add_heart_conductivity([34, 35, 36], il=0.9074, it=0.3332, el=0.9074, et=0.3332)
 
     # Build stiffness matrices
-    lf.assemable()
+    lf.assemble()
     
     # Load electrodes
     lf.load_electrodes("/data/Bei/Torso/HC3/electrodes/lf_src.vtx")

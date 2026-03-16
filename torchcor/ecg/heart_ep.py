@@ -22,12 +22,11 @@ simulator.add_stimulus(mesh_dir / "pacing" / "LV_af.vtx", start=0.0, duration=1.
 simulator.add_stimulus(mesh_dir / "pacing" / "RV_sf.vtx", start=5.0, duration=1.0, intensity=100)
 simulator.add_stimulus(mesh_dir / "pacing" / "RV_mod.vtx", start=5.0, duration=1.0, intensity=100)
 
-simulator.solve(a_tol=1e-5,                 
-                r_tol=1e-5,                 
-                max_iter=1000,               
-                calculate_AT_RT=True,       
+simulator.solve(a_tol=1e-5,
+                r_tol=1e-5,
+                max_iter=1000,
                 linear_guess=True,
-                snapshot_interval=1,         
+                snapshot_interval=1,
                 verbose=True,
                 result_path="./biventricle")
 

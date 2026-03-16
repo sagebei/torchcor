@@ -420,19 +420,17 @@ class Monodomain:
 
 
     def simulated_ECG(self):
-        im = IGBWriter({
-            "fname": os.path.join(self.result_path, "phie.igb"),
-            "Tend": self.T + 1,
-            "nt": self.nt + 1,
-            "nx": self.n_nodes,
-            "ny": 1,
-            "nz": 1
-        })
-
         path = os.path.join(self.result_path, "Phi_e.pt")
-        phie = torch.load(path).numpy()
-        for p in phie:
-           im.imshow(p)
+        phie = torch.load(path).cpu().numpy().astype(np.float32)
+
+        header = {'x': self.n_nodes, 'y': 1, 'z': 1,
+                  't': phie.shape[0],
+                  'org_t': 0.0,
+                  'Tend': self.T}
+        im = IGBWriter()
+        im.initialise_from_data(header, phie)
+        im.set_fname(os.path.join(self.result_path, "phie.igb"))
+        im.write_data_to_file()
         
         ECGs = Ecg(os.path.join(self.result_path, 'phie.igb'), dt=1)
 
