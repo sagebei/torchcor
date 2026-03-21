@@ -211,16 +211,26 @@ class ECGSolver:
         reader = MeshReader(mesh_dir)
         n, e, r, _ = reader.read(unit_conversion=unit_conversion)
         self.torso_nodes = torch.from_numpy(n).to(self.device, self.dtype)
-        self.torso_elems = torch.from_numpy(e).to(self.device, torch.long)
+        # e is an Elems object; extract the tetrahedral connectivity array
+        self.torso_elems = torch.from_numpy(
+            np.asarray(e.Tt.data, dtype=np.int64)
+        ).to(self.device, torch.long)
         self.torso_regions = torch.from_numpy(r).to(self.device, torch.long)
 
     def _load_heart_mesh(self, mesh_dir, unit_conversion=1000):
         reader = MeshReader(mesh_dir)
         n, e, r, f = reader.read(unit_conversion=unit_conversion)
         self.heart_nodes = torch.from_numpy(n).to(self.device, self.dtype)
-        self.heart_elems = torch.from_numpy(e).to(self.device, torch.long)
+        # e is an Elems object; extract the tetrahedral connectivity array
+        self.heart_elems = torch.from_numpy(
+            np.asarray(e.Tt.data, dtype=np.int64)
+        ).to(self.device, torch.long)
         self.heart_regions = torch.from_numpy(r).to(self.device, torch.long)
-        self.heart_fibres = torch.from_numpy(f).to(self.device, self.dtype)
+        # f may be (M, 6) for CARP format-2 fibers; keep longitudinal (first 3)
+        f3 = np.asarray(f, dtype=np.float32)
+        if f3.ndim == 2 and f3.shape[1] == 6:
+            f3 = f3[:, :3]
+        self.heart_fibres = torch.from_numpy(f3).to(self.device, self.dtype)
 
     # -----------------------------------------------------------------
     # Conductivity assignment
