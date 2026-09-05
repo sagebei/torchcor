@@ -192,6 +192,13 @@ class TenTusscherPanfilov:
 
         self.V_row = None
 
+        if not torch.jit.is_scripting():
+            self.differentiate = torch.compile(
+                self.differentiate,
+                fullgraph=True,
+                options={"triton.cudagraphs": False},
+            )
+
 
     def interpolate(self, X, table, mn: float, mx: float, res: float, step: float, mx_idx: int):
         X = torch.clamp(X, mn, mx)

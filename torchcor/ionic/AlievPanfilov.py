@@ -47,6 +47,13 @@ class AlievPanfilov:
         # State variables (vectors)
         self.Vrec = torch.tensor(0.0, device=device, dtype=dtype)  # recovery variable
 
+        if not torch.jit.is_scripting():
+            self.differentiate = torch.compile(
+                self.differentiate,
+                fullgraph=True,
+                options={"triton.cudagraphs": False},
+            )
+
     # ----------------------------------------------------
     # Initialisation
     # ----------------------------------------------------

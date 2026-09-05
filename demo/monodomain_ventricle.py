@@ -48,4 +48,4 @@ RTs = simulator.compute_repolarization_map(Vm=Vm,
                                            threshold=-70)
 print("RTs: ", RTs.min().item(), RTs.cpu().max().item(), flush=True)
 
-simulator.vm_to_vtk(Vm=Vm, step=10)
+# simulator.vm_to_vtk(Vm=Vm, step=10)

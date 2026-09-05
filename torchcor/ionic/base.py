@@ -20,7 +20,16 @@ class BaseCellModel:
             self.name_constant_dict[constant_name] = init_constant
 
         self.H = None
-        
+
+        # Wrapping the bound method here also covers subclass overrides.
+        # Compilation is lazy: subclasses and initialize() finish setup first.
+        if not torch.jit.is_scripting():
+            self.differentiate = torch.compile(
+                self.differentiate,
+                fullgraph=True,
+                options={"triton.cudagraphs": False},
+            )
+
 
     def default_constants(self):
         return dict(self.name_constant_dict)
@@ -117,6 +126,13 @@ class BaseCellModelRL:
         self.H = None
         self.dt = None
 
+        if not torch.jit.is_scripting():
+            self.differentiate = torch.compile(
+                self.differentiate,
+                fullgraph=True,
+                options={"triton.cudagraphs": False},
+            )
+
     def initialize(self, n_nodes, dt):
         self.states = self.states.repeat(n_nodes, 1).clone()
 
@@ -179,5 +195,4 @@ class BaseCellModelRL:
 
     def get_attribute(self, name: str):
         return getattr(self, name, None)
-
 

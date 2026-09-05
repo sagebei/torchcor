@@ -28,7 +28,14 @@ class ModifiedMS2v:
         self.DV  = self.vmax - self.vmin
 
         self.H = torch.tensor(1.0) 
-        
+
+        if not torch.jit.is_scripting():
+            self.differentiate = torch.compile(
+                self.differentiate,
+                fullgraph=True,
+                options={"triton.cudagraphs": False},
+            )
+
         
 
     def to_dimensionless(self, U: torch.Tensor) -> torch.Tensor:

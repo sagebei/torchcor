@@ -16,8 +16,11 @@ im = TenTusscherPanfilov(cell_type="ENDO", dt=dt, dtype=dtype)
 # 1. Reaction-Eikonal model.  diffusion=False (R-E-): no diffusion/linear solve --
 #    each cell fires its own AP as the wavefront arrives, so Vm is cheap to make.
 #    (diffusion=True adds electrotonic coupling but costs ~monodomain on a fine mesh.)
-simulator = ReactionEikonal(ionic_models=[im], T=simulation_time, dt=dt,
-                            diffusion=False, dtype=dtype)
+simulator = ReactionEikonal(ionic_models=[im], 
+                            T=simulation_time, 
+                            dt=dt,
+                            diffusion=True, 
+                            dtype=dtype)
 # 2. Load the mesh (.pts .elem .lon)
 simulator.load_mesh(path=mesh_dir)
 # 3. Conduction velocities (m/s) per region -- the eikonal times the wavefront.
@@ -40,11 +43,11 @@ print("eikonal AT: ", AT_eikonal.min().item(), AT_eikonal.cpu().max().item(), fl
 #    are R-E+ only.
 snapshot_interval = 1
 Vm = simulator.solve(a_tol=1e-5, r_tol=1e-5, max_iter=100,
-                     snapshot_interval=snapshot_interval, verbose=False,
+                     snapshot_interval=snapshot_interval, 
+                     verbose=False,
                      result_path="./biventricle_eikonal")
 
-# Vm is the cheap cardiac source: feed it to a lead-field / extracellular solver
-# for electrograms and the 12-lead ECG (Neic 2017).  That solve is a separate step.
-simulator.save_vm(Vm)              # -> ./biventricle_eikonal/Vm.pt
-print("saved Vm for ECG:", tuple(Vm.shape), "| range",
-      round(Vm.min().item(), 1), round(Vm.max().item(), 1), flush=True)
+
+# simulator.save_vm(Vm)              # -> ./biventricle_eikonal/Vm.pt
+# print("saved Vm for ECG:", tuple(Vm.shape), "| range",
+#       round(Vm.min().item(), 1), round(Vm.max().item(), 1), flush=True)

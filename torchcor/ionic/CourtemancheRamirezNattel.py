@@ -207,6 +207,13 @@ class CourtemancheRamirezNattel:
         self.f_Ca_rush_larsen_B = exp(((-self.dt)/self.tau_f_Ca))
         self.u_rush_larsen_B = exp(((-self.dt)/self.tau_u))
 
+        if not torch.jit.is_scripting():
+            self.differentiate = torch.compile(
+                self.differentiate,
+                fullgraph=True,
+                options={"triton.cudagraphs": False},
+            )
+
 
     def interpolate(self, X, table, mn: float, mx: float, res: float, step: float, mx_idx: int):
         X = torch.clamp(X, mn, mx)

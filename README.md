@@ -23,9 +23,7 @@
 - 🚀 Fast, scalable CEP simulations on large and complex heart meshes  
 - 🔗 Seamless integration with PyTorch and scientific machine learning workflows  
 - ⚙️ Support for a wide range of ionic models and conductivity heterogeneity  
-- 🔧 Fully customizable model parameters for flexible experimentation and prototyping
-- 🎯 Accurate simulation of cardiac electrical activity for research and development  
-- 📈 Generation of precise local activation and repolarization time maps  
+- 📈 Generation of precise local activation and repolarization time maps with monodomain or reaction-eikonal
 - 🩺 Simulation of clinically relevant **12-lead ECG** signals via the lead-field method
 
 
@@ -44,31 +42,6 @@ Below are simulation results showcasing the electrical activation patterns over 
     </td>
   </tr>
 </table>
-
-## ⚡ Performance
-
-TorchCor is optimized for high-throughput cardiac electrophysiology simulations on large-scale meshes. The benchmarks below demonstrate its ability to efficiently scale with mesh size and leverage GPU acceleration over traditional CPU-based solvers. Performance tests were conducted using an **AMD Ryzen Threadripper 3990X 64-Core Processor** and the following GPUs:
-
-- NVIDIA Tesla V100  
-- NVIDIA GeForce RTX 3090  
-- NVIDIA RTX A6000  
-- NVIDIA A100 80GB PCIe  
-- NVIDIA H100 80GB HBM3  
-
-<table>
-  <tr>
-    <td align="center">
-      <img src="docs/performance_cubic.png" alt="Performance on cubic meshes" width="400"/><br/>
-      <em>Execution time on cubic 3D volume meshes with increasing node counts.</em>
-    </td>
-    <td align="center">
-      <img src="docs/performance_biv.png" alt="Performance on bi-ventricle mesh" width="400"/><br/>
-      <em>Execution time on a bi-ventricle mesh (637,480 nodes) using various CPU cores and GPU devices.</em>
-    </td>
-  </tr>
-</table>
-
-Unlike traditional CPU-based solvers like PETSc, which rely heavily on MPI-based parallelism and incur communication overhead, TorchCor minimizes latency by exploiting GPU-local memory and massive parallelism. This leads to superior scaling on large meshes, where CPU frameworks struggle with inter-process communication and abstraction overheads, allowing a high-throughput, low-latency pipeline well-suited for time-sensitive cardiac simulations.
 
 ## 📦 Installation
 
@@ -96,7 +69,7 @@ Running the following code will produce:
 - a list of membrane potentials, each saved after every 1 ms of the simulation
 - a local activation time map and a repolarisation time map  
 
-all saved in `.pt` file format readable by `torch.load`. 
+all saved in `.pt` file format readable by `torch.load`. This execution takes 73 seconds on RTX 5090. 
 
 ```python
 import torchcor as tc
