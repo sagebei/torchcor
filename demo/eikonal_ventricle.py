@@ -10,7 +10,6 @@ simulation_time = 500      # total duration (ms)
 dt = 0.01                  # time step (ms)
 
 mesh_dir = Path.home() / "Data/ventricle/Case_1"
-# TenTusscherPanfilov ventricular cell model
 im = TenTusscherPanfilov(cell_type="ENDO", dt=dt, dtype=dtype)
 
 # 1. Reaction-Eikonal model.  diffusion=False (R-E-): no diffusion/linear solve --
@@ -19,14 +18,14 @@ im = TenTusscherPanfilov(cell_type="ENDO", dt=dt, dtype=dtype)
 simulator = ReactionEikonal(ionic_models=[im], 
                             T=simulation_time, 
                             dt=dt,
-                            diffusion=True, 
+                            diffusion=False, 
                             dtype=dtype)
 # 2. Load the mesh (.pts .elem .lon)
 simulator.load_mesh(path=mesh_dir)
 # 3. Conduction velocities (m/s) per region -- the eikonal times the wavefront.
 #    Fast endocardial layer (44,45,46) a little quicker than bulk myocardium (34,35).
 simulator.add_velocity([34, 35],     vel_l=0.60, vel_t=0.38)
-simulator.add_velocity([44, 45, 46], vel_l=0.68, vel_t=0.41)
+simulator.add_velocity([44, 45, 46], vel_l=0.9, vel_t=0.41)
 # 4. Seed the wavefront at the His-Purkinje junctions: LV fascicles at t=0, RV at 5 ms.
 simulator.add_stimulus(mesh_dir / "LV_sf.vtx",  start=0.0, duration=1.0, intensity=100)
 simulator.add_stimulus(mesh_dir / "LV_pf.vtx",  start=0.0, duration=1.0, intensity=100)
@@ -41,13 +40,8 @@ print("eikonal AT: ", AT_eikonal.min().item(), AT_eikonal.cpu().max().item(), fl
 
 # 6. Reaction -> full Vm.  No linear solve (diffusion=False); a_tol/r_tol/max_iter
 #    are R-E+ only.
-snapshot_interval = 1
 Vm = simulator.solve(a_tol=1e-5, r_tol=1e-5, max_iter=100,
-                     snapshot_interval=snapshot_interval, 
-                     verbose=False,
+                     snapshot_interval=1, 
+                     verbose=True,
                      result_path="./biventricle_eikonal")
-
-
-# simulator.save_vm(Vm)              # -> ./biventricle_eikonal/Vm.pt
-# print("saved Vm for ECG:", tuple(Vm.shape), "| range",
-#       round(Vm.min().item(), 1), round(Vm.max().item(), 1), flush=True)
+simulator.vm_to_vtk(Vm=Vm, step=10)

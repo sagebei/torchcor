@@ -1,0 +1,157 @@
+#===================================
+# Source (EP) Model: Reaction-Eikonal (RE-)
+#===================================
+# Matches demo/eikonal_ventricle.py: ReactionEikonal(diffusion=False).
+# RE- requires the parabolic solver (the reaction is still integrated per node),
+# but no diffusion / linear solve is performed.
+
+mass_lumping   = 0
+bidomain       = 0
+bidm_eqv_mono  = 1
+parab_solve    = 1
+
+#===================================
+# Physics Regions
+#===================================
+# Assign the whole myocardium to the Eikonal physics (ptype 2).
+num_phys_regions         = 1
+phys_region[0].name      = "eikonal"
+phys_region[0].ptype     = 2          # 0: Intracellular Electrics, 2: Eikonal
+phys_region[0].num_IDs   = 5
+phys_region[0].ID[0]     = 34  #RV
+phys_region[0].ID[1]     = 35  #LV
+phys_region[0].ID[2]     = 44  #RV_subendo
+phys_region[0].ID[3]     = 45  #LV_subendo
+phys_region[0].ID[4]     = 46  #RVseptum_subendo
+
+#===================================
+# Eikonal Solver
+#===================================
+dream.solve              = 2          # 0: Eikonal, 1: RE+, 2: RE-, 3: DREAM
+                                      # 2 == diffusion=False in the torchcor demo
+dream.fim.tol            = 1e-3       # [ms]  fast iterative method tolerance
+dream.fim.max_iter       = 100000     # FIM iteration cap
+dream.output.atfile      = "act"      # activation times (IGB)
+
+#===================================
+# Ionic Model
+#===================================
+# imp_region: assignment of active electrophysiological properties
+num_imp_regions          = 1
+
+# ------------------------------------------------------------------------------
+# Ventricular Myocytes
+# ------------------------------------------------------------------------------
+imp_region[0].num_IDs    = 5
+imp_region[0].ID[0]      = 34  #RV
+imp_region[0].ID[1]      = 35  #LV
+imp_region[0].ID[2]      = 44  #RV_subendo
+imp_region[0].ID[3]      = 45  #LV_subendo
+imp_region[0].ID[4]      = 46  #RVseptum_subendo
+imp_region[0].im         = tenTusscherPanfilov
+imp_region[0].cellSurfVolRatio = 0.14
+imp_region[0].im_param   = "flags=ENDO"
+
+#===================================
+# Conduction Velocities / Conductivities
+#===================================
+# gregion: assignement of passive tissue properties
+# With the eikonal physics the dream.vel_* entries drive the wavefront [mm/s].
+# The g_* conductivities are only used if you switch back to monodomain or RE+.
+num_gregions             = 2
+
+
+# ------------------------------------------------------------------------------
+# Ventricles
+# ------------------------------------------------------------------------------
+# R-D settings
+gregion[0].num_IDs       = 2
+gregion[0].ID[0]         = 34       # RV
+gregion[0].ID[1]         = 35       # LV
+gregion[0].dream.vel_l   = 600      # [mm/s] CV along the fibre direction  (0.60 m/s)
+gregion[0].dream.vel_t   = 380      # [mm/s] CV transverse to the fibre    (0.38 m/s)
+gregion[0].dream.vel_n   = 380      # [mm/s] CV normal to the fibre        (0.38 m/s)
+gregion[0].g_il          = 0.4782 # CV = 0.60m/s # [S/m] Conductivity along the fibre direction (l=longitudinal) in the intracellular space
+gregion[0].g_el          = 0.9734 # [S/m] Conductivity along the fibre direction (l=longitudinal) in the extracellular space
+gregion[0].g_it          = 0.3331 # CV = 0.38m/s # [S/m] Conductivity transverse to the fibre direction (t=trasversal) in the intracellular space
+gregion[0].g_et          = 0.6782 # [S/m] Conductivity transverse to the fibre direction (t=trasversal) in the extracellular space
+
+gregion[1].num_IDs       = 3
+gregion[1].ID[0]         = 44 #RV_subendo
+gregion[1].ID[1]         = 45 #LV_subendo
+gregion[1].ID[2]         = 46 #RVseptum_subendo
+gregion[1].dream.vel_l   = 900      # [mm/s] (0.90 m/s)
+gregion[1].dream.vel_t   = 410      # [mm/s] (0.41 m/s)
+gregion[1].dream.vel_n   = 410      # [mm/s] (0.41 m/s)
+gregion[1].g_il          = 1.4430 # CV = 0.90m/s
+gregion[1].g_el          = 1.4430
+gregion[1].g_it          = 0.5201 # CV = 0.41m/s
+gregion[1].g_et          = 0.5201
+
+
+#===================================
+# Stimulation
+#===================================
+# The eikonal uses only the geometry, start time, npls and bcl of each stimulus;
+# duration/strength are ignored but kept for the monodomain reference run.
+num_stim             = 5
+
+stimulus[0].name     = LV_sf
+stimulus[0].stimtype = 0
+stimulus[0].duration = 1.0
+stimulus[0].strength = 100
+stimulus[0].start    = 0.0
+stimulus[0].vtx_file = /home/bzhou6/Data/ventricle/Case_1/LV_sf
+
+stimulus[1].name     = LV_pf
+stimulus[1].stimtype = 0
+stimulus[1].duration = 1.0
+stimulus[1].strength = 100
+stimulus[1].start    = 0.0
+stimulus[1].vtx_file = /home/bzhou6/Data/ventricle/Case_1/LV_pf
+
+stimulus[2].name     = LV_af
+stimulus[2].stimtype = 0
+stimulus[2].duration = 1.0
+stimulus[2].strength = 100
+stimulus[2].start    = 0.0
+stimulus[2].vtx_file = /home/bzhou6/Data/ventricle/Case_1/LV_af
+
+stimulus[3].name     = RV_sf
+stimulus[3].stimtype = 0
+stimulus[3].duration = 1.0
+stimulus[3].strength = 100
+stimulus[3].start    = 5.0
+stimulus[3].vtx_file = /home/bzhou6/Data/ventricle/Case_1/RV_sf
+
+stimulus[4].name     = RV_mod
+stimulus[4].stimtype = 0
+stimulus[4].duration = 1.0
+stimulus[4].strength = 100
+stimulus[4].start    = 5.0
+stimulus[4].vtx_file = /home/bzhou6/Data/ventricle/Case_1/RV_mod
+
+
+#===================================
+# Solver
+#===================================
+dt                       = 10               # Defines the time step size to solve the numeric equations for. NOTE: [us]
+tend                     = 500             # Defines the point in time when the simulation stops.                 [ms]
+simID   = "biv"
+
+#===================================
+# Output
+#===================================
+timedt                   = 10             # Defines the temporal interval between progress updates made to the terminal. (For informational purposes only).
+spacedt                  = 1              # Defines the temporal interval to output data to files.
+gridout_i                = 0
+
+
+num_LATs = 2
+lats[0].measurand = 0
+lats[0].all = 0
+lats[0].mode = 0
+lats[0].threshold = 0
+lats[0].method = 1
+lats[0].ID = "activation"
+

@@ -1,0 +1,7 @@
+-ksp_type cg
+-ksp_max_it 100
+-ksp_atol 1e-5
+-ksp_rtol 1e-5
+-pc_type jacobi
+-pc_jacobi_type diagonal
+-options_left
