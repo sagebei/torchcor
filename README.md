@@ -79,7 +79,7 @@ from pathlib import Path
 
 # Specify the GPU device for running the simulation
 tc.set_device("cuda:0")
-dtype = tc.float64
+dtype = tc.float32
 # The total simulation duration (ms)
 simulation_time = 500
 dt = 0.01
