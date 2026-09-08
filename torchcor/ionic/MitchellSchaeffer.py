@@ -1,91 +1,116 @@
 import torch
-from torchcor.ionic.cellml import mitchell_schaeffer_2003
-from torchcor.ionic.base import BaseCellModel, BaseCellModelRL
+import torchcor as tc
+from math import exp, log, sqrt
+from typing import Optional, List
 
 
-class MitchellSchaeffer(BaseCellModel):
-    def __init__(self, device, dtype=torch.float32):
-        super().__init__(mitchell_schaeffer_2003, device, dtype)
+@torch.jit.script
+class MitchellSchaeffer:
+    def __init__(self, 
+                 dt: float, 
+                 region_ids: Optional[List[int]] = None, 
+                 device: torch.device = torch.device("cpu"),
+                 dtype: torch.dtype = torch.float64):
+        
         self.name = "MitchellSchaeffer"
+        self.dt = dt
+        self.region_ids = region_ids
+        self.node_indices = torch.tensor([0])
+        self.device = device
+        self.dtype = dtype
 
-    def compute_rates(self, states, constants):
-        rates = torch.zeros_like(states)
-        algebraic = torch.zeros((states.shape[0], self.cell_model.sizeAlgebraic), device=self.device, dtype=self.dtype)
+        # Constants
+        self.h_init = 1.0
 
-        rates[:, 1] = torch.where(states[:, 0] < constants[8],
-                                  (1.00000-states[:, 1])/constants[6],
-                                  -states[:, 1]/constants[7])
-        algebraic[:, 0] = 0.0
-        algebraic[:, 1] = (states[:, 1]*((torch.pow(states[:, 0], 2.00000))*(1.00000-states[:, 0])))/constants[5]
-        algebraic[:, 2] = -(states[:, 0]/constants[9])
-        rates[:, 0] = algebraic[:, 1]+algebraic[:, 2]+algebraic[:, 0]
+        # Parameters
+        self.V_gate = 0.13
+        self.V_max = 1.0
+        self.V_min = 0.0
+        self.a_crit = 0.0
+        self.tau_close = 150.0
+        self.tau_in = 0.3
+        self.tau_open = 120.0
+        self.tau_out = 5.0
+        self.V_init = self.V_min
 
-        return rates
+        # 0 lookup tables
+
+        # 1 states variables
+        self.h = torch.tensor([self.h_init])
+
+        if not torch.jit.is_scripting():
+            self.differentiate = torch.compile(
+                self.differentiate,
+                fullgraph=True,
+                options={"triton.cudagraphs": False},
+            )
 
 
-class MitchellSchaefferRL(BaseCellModel):
-    def __init__(self, device, dtype=torch.float64):
-        super().__init__(mitchell_schaeffer_2003, device, dtype)
+    def interpolate(self, X, table, mn: float, mx: float, res: float, step: float, mx_idx: int):
+        X = torch.clamp(X, mn, mx)
+        idx = ((X - mn) * step).to(torch.long)
+        lower_idx = torch.clamp(idx, 0, mx_idx - 1)
+        higher_idx = lower_idx + 1
+        lower_pos = lower_idx * res + mn
+        w = ((X - lower_pos) / res).unsqueeze(1)
+        return (1 - w) * table[lower_idx] + w * table[higher_idx]
 
-    def differentiate(self, U):
-        # Update states for membrane potential and gating variable
-        self.states[:, 0] = U  # Vm
-        h = self.states[:, 1]  # h
+    def construct_tables(self):
+        # MitchellSchaeffer declares no lookup tables, every rate is evaluated on the fly
+        pass
 
-        # Compute rates and algebraic terms
-        rates = self.compute_rates(states=self.states, constants=self.constants)
+    def initialize(self, n_nodes: int):
+        self.construct_tables()
+        
+        V = torch.full((n_nodes,), self.V_init, device=self.device, dtype=self.dtype)
 
-        # Rush-Larsen update for h
-        tau_open = self.constants[6]
-        tau_close = self.constants[7]
-        V_gate = self.constants[8]
+        self.h = torch.full((n_nodes,), self.h_init, device=self.device, dtype=self.dtype)
 
-        # Determine steady-state h_inf and tau_h
-        h_inf = torch.where(U < V_gate, 1.0, 0.0)
-        tau_h = torch.where(U < V_gate, tau_open, tau_close)
+        return V
 
-        # Update h using Rush-Larsen method
-        self.states[:, 1] = h_inf + (h - h_inf) * torch.exp(-self.dt / tau_h)
+    def differentiate(self, V):
+        # Compute storevars and external modvars
+        Uamp = (self.V_max-(self.V_min))
+        Jin = ((((self.h*((V-(self.V_min))/Uamp))*(((V-(self.V_min))/Uamp)-(self.a_crit)))*((self.V_max-(V))/Uamp))/self.tau_in)
+        Jout = (-(((V-(self.V_min))/Uamp)/self.tau_out))
+        Iion = ((-Uamp)*(Jin+Jout))
 
-        # Update Vm (membrane potential)
-        dU = rates[:, 0]
-        return dU
+        # Complete Forward Euler Update
+        U = ((V-(self.V_min))/Uamp)
+        diff_h = (torch.where((U<self.V_gate), ((1.-(self.h))/self.tau_open), ((-self.h)/self.tau_close)))
+        h_new = self.h+diff_h*self.dt
 
-    def compute_rates(self, states, constants):
-        rates = torch.zeros_like(states)
-        algebraic = torch.zeros((states.shape[0], self.cell_model.sizeAlgebraic), device=self.device, dtype=self.dtype)
+        # Finish the update
+        self.h = h_new
 
-        rates[:, 1] = torch.where(states[:, 0] < constants[8],
-                                  (1.00000-states[:, 1])/constants[6],
-                                  -states[:, 1]/constants[7])
-        algebraic[:, 0] = 0.0
-        algebraic[:, 1] = (states[:, 1]*((torch.pow(states[:, 0], 2.00000))*(1.00000-states[:, 0])))/constants[5]
-        algebraic[:, 2] = -(states[:, 0]/constants[9])
-        rates[:, 0] = algebraic[:, 1]+algebraic[:, 2]+algebraic[:, 0]
-
-        return rates
+        return -Iion
 
 
 if __name__ == "__main__":
-    TEND   = 500   # final time (in ms)
-    dt     = 0.001  # time step
-    dt_out = 1.0    # writes the output every dt_out ms
-    Istim  = 100    # intensity of the stimulus
-    tstim  = 1.0    # duration of the stimulus (in ms)
-    tt     = MitchellSchaeffer(device=None, dtype=torch.float64)
-    print(tt.default_constants())
-    # U      = tt.initialize(n_nodes=1, dt=dt)
-    # plot_freq = int(dt_out/dt)  # writes the solution every plot_freq time steps
-    # URES      = []
-    # for jj in range(int(TEND/dt)):
-    #     dU = tt.differentiate(U)
-    #     if(jj<=int(tstim/dt)):
-    #         U += dt*(dU+Istim)
-    #     else:
-    #         U += dt*dU
-    #    # tt.states[0]=U
-    #     if jj%plot_freq==0:
-    #         URES.append(U.item())
-    # import matplotlib.pyplot as plt
-    # plt.plot(URES)
-    # plt.show()
+    import matplotlib.pyplot as plt
+    import numpy as np
+    dt = 0.01
+    dt_imp = float(np.float32(dt))   # limpet keeps the IMP time step in a float
+    stimulus = 0.3
+    device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
+    ionic = MitchellSchaeffer(dt=dt_imp, 
+                              device=device, 
+                              dtype=torch.float64)
+    V = ionic.initialize(n_nodes=1)
+
+    V_list = []
+
+    ctime = 0.0
+    for _ in range(int(1000/dt)):
+        V_list.append([ctime, V.item()])
+
+        if ctime >= 0 and ctime < (0+2.0): 
+            V = V + dt * stimulus
+        dV = ionic.differentiate(V)
+        V = V + dt * dV
+        ctime += dt
+
+    plt.figure()
+    V_list = np.array(V_list)    
+    plt.plot(V_list[:, 0], V_list[:, 1])
+    plt.savefig("V_MitchellSchaeffer.png")

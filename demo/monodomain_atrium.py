@@ -1,10 +1,10 @@
 import torchcor as tc
 from torchcor.simulator import Monodomain
-from torchcor.ionic import ModifiedMS2v, CourtemancheRamirezNattel
+from torchcor.ionic import CourtemancheRamirezNattel
 from pathlib import Path
 
 # Specify the GPU device to run the simulation on 
-tc.set_device("cuda:0")
+tc.set_device("cuda:1")
 dtype = tc.float32
 # The total simulation duration (ms)
 simulation_time = 500
@@ -12,13 +12,7 @@ simulation_time = 500
 dt = 0.01
 
 # Load in the ionic model, such as MitchellSceaffer, CourtemancheRamirezNattel, or TenTussherPanfilov
-im = ModifiedMS2v(dt, dtype=dtype)
-im.u_gate = 0.1
-im.u_crit = 0.1
-im.tau_in = 0.15
-im.tau_out = 1.5
-im.tau_open = 105.0
-im.tau_close = 185.0
+im = CourtemancheRamirezNattel(dt, dtype=dtype)
 
 case_name = "Case_18"
 mesh_dir = Path("/home/bzhou6/Data/atrium/") / case_name
@@ -48,7 +42,7 @@ Vm = simulator.solve(a_tol=1e-5,              # absolute tolerance
 # POSTPROCESSING: 
 ATs = simulator.compute_activation_map(Vm=Vm, 
                                        snapshot_interval=snapshot_interval, 
-                                       threshold=0)
+                                       threshold=-10)
 print("ATs: ", ATs.min().item(), ATs.cpu().max().item(), flush=True)
 RTs = simulator.compute_repolarization_map(Vm=Vm, 
                                            search_after=ATs,
@@ -56,6 +50,6 @@ RTs = simulator.compute_repolarization_map(Vm=Vm,
                                            threshold=-70)
 print("RTs: ", RTs.min().item(), RTs.cpu().max().item(), flush=True)
 
-simulator.vm_to_vtk(Vm=Vm, step=10)
+# simulator.vm_to_vtk(Vm=Vm, step=10)
 
 

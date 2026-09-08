@@ -69,7 +69,7 @@ Running the following code will produce:
 - a list of membrane potentials, each saved after every 1 ms of the simulation
 - a local activation time map and a repolarisation time map  
 
-all saved in `.pt` file format readable by `torch.load`. This execution takes 73 seconds on RTX 5090. 
+all saved in `.pt` file format readable by `torch.load`. This execution takes 47.6 seconds on RTX 5090. 
 
 ```python
 import torchcor as tc

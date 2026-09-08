@@ -342,7 +342,7 @@ class TenTusscherPanfilov:
         self.CaSR = torch.full((n_nodes,), self.CaSR_init, device=self.device, dtype=self.dtype)
         self.CaSS = torch.full((n_nodes,), self.CaSS_init, device=self.device, dtype=self.dtype)
         self.Cai = torch.full((n_nodes,), self.Cai_init, device=self.device, dtype=self.dtype)
-        # self.Cai *= 1e3
+        self.Cai = self.Cai * 1e3
         self.F = torch.full((n_nodes,), self.F_init, device=self.device, dtype=self.dtype)
         self.F2 = torch.full((n_nodes,), self.F2_init, device=self.device, dtype=self.dtype)
         self.FCaSS = torch.full((n_nodes,), self.FCaSS_init, device=self.device, dtype=self.dtype)
@@ -362,7 +362,7 @@ class TenTusscherPanfilov:
         return V
 
     def differentiate(self, V):
-        # self.Cai *= 1e-3
+        self.Cai = self.Cai * 1e-3
 
         # Define the constants that depend on the parameters.
         RTONF = ((self.Rconst*self.T)/self.Fconst)
@@ -460,7 +460,7 @@ class TenTusscherPanfilov:
         self.Xr2 = Xr2_rush_larsen_A+Xr2_rush_larsen_B*self.Xr2
         self.Xs = Xs_rush_larsen_A+Xs_rush_larsen_B*self.Xs
 
-        # self.Cai *= 1e3
+        self.Cai = self.Cai * 1e3
 
         return -Iion
 
