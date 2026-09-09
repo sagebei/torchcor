@@ -5,7 +5,7 @@ from typing import Optional, List
 
 
 @torch.jit.script
-class ToRORd:
+class Tomek19:
     def __init__(self, 
                  dt: float, 
                  region_ids: Optional[List[int]] = None, 
@@ -13,7 +13,7 @@ class ToRORd:
                  device: torch.device = torch.device("cpu"),
                  dtype: torch.dtype = torch.float64):
         
-        self.name = "ToRORd"
+        self.name = "Tomek19"
         self.dt = dt
         self.region_ids = region_ids
         self.node_indices = torch.tensor([0])
