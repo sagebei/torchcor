@@ -27,7 +27,7 @@ phys_region[0].ID[4]     = 46  #RVseptum_subendo
 #===================================
 # Eikonal Solver
 #===================================
-dream.solve              = 2          # 0: Eikonal, 1: RE+, 2: RE-, 3: DREAM
+dream.solve              = 2          # 0: Eikonal, 1: RE+, 2: RE-
                                       # 2 == diffusion=False in the torchcor demo
 dream.fim.tol            = 1e-3       # [ms]  fast iterative method tolerance
 dream.fim.max_iter       = 100000     # FIM iteration cap
@@ -71,10 +71,6 @@ gregion[0].ID[1]         = 35       # LV
 gregion[0].dream.vel_l   = 600      # [mm/s] CV along the fibre direction  (0.60 m/s)
 gregion[0].dream.vel_t   = 380      # [mm/s] CV transverse to the fibre    (0.38 m/s)
 gregion[0].dream.vel_n   = 380      # [mm/s] CV normal to the fibre        (0.38 m/s)
-gregion[0].g_il          = 0.4782 # CV = 0.60m/s # [S/m] Conductivity along the fibre direction (l=longitudinal) in the intracellular space
-gregion[0].g_el          = 0.9734 # [S/m] Conductivity along the fibre direction (l=longitudinal) in the extracellular space
-gregion[0].g_it          = 0.3331 # CV = 0.38m/s # [S/m] Conductivity transverse to the fibre direction (t=trasversal) in the intracellular space
-gregion[0].g_et          = 0.6782 # [S/m] Conductivity transverse to the fibre direction (t=trasversal) in the extracellular space
 
 gregion[1].num_IDs       = 3
 gregion[1].ID[0]         = 44 #RV_subendo
@@ -83,10 +79,7 @@ gregion[1].ID[2]         = 46 #RVseptum_subendo
 gregion[1].dream.vel_l   = 900      # [mm/s] (0.90 m/s)
 gregion[1].dream.vel_t   = 410      # [mm/s] (0.41 m/s)
 gregion[1].dream.vel_n   = 410      # [mm/s] (0.41 m/s)
-gregion[1].g_il          = 1.4430 # CV = 0.90m/s
-gregion[1].g_el          = 1.4430
-gregion[1].g_it          = 0.5201 # CV = 0.41m/s
-gregion[1].g_et          = 0.5201
+
 
 
 #===================================

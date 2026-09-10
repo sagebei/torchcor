@@ -9,14 +9,16 @@ import numpy as np
 import torch
 
 
-def arguments(description, argv=None):
+def arguments(description, argv=None, default_out="."):
+    """Parse the runner's options.  Outputs land in ``default_out`` unless
+    ``--out`` says otherwise; each benchmark passes its own folder."""
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--device", default="cuda", metavar="DEV",
                         help="CUDA device, for example cuda:0 or cuda:1")
     parser.add_argument("--mesh", type=int, nargs=3, metavar=("N1", "N2", "N3"),
                         help="solve one mesh instead of the default refinement study")
-    parser.add_argument("--out", type=Path, default=Path("."), metavar="DIR",
-                        help="directory for numeric JSON and figures")
+    parser.add_argument("--out", type=Path, default=Path(default_out), metavar="DIR",
+                        help=f"directory for numeric JSON and figures (default: {default_out})")
     args = parser.parse_args(argv)
     if torch.device(args.device).type != "cuda":
         parser.error("these benchmark runners require a CUDA device")

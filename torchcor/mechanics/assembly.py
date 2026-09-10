@@ -23,13 +23,13 @@ import numpy as np
 import torch
 
 from torchcor.mechanics.boundary import (
-    DirichletBC, DirichletConstraints, FollowerPressure,
+    DirichletBC, DirichletConstraints, FollowerPressure, RobinBC,
 )
-from torchcor.mechanics.elements import LagrangeHex, LagrangeQuad
 from torchcor.mechanics.material import (
     AugmentedLagrangian, HyperelasticMaterial, MaterialAxes, OrientedMaterial,
 )
-from torchcor.mechanics.mesh import HexMesh
+from torchcor.mechanics.elements import LagrangeHex
+from torchcor.mechanics.mesh import Mesh
 
 @dataclass
 class AssemblyInfo:
@@ -193,6 +193,17 @@ class SparseAssembler:
         return B
 
 
+def volume_quadrature_order(order: int, element=LagrangeHex) -> int:
+    """Gauss points per axis for the volume terms of an order-``order`` cell.
+
+    Each element family answers for its own rule: a cube's Gauss rule and a
+    simplex's collapsed rule reach different degrees from the same count.
+    Public because a caller that samples the same points -- a spatially varying
+    material frame, say -- has to agree with the assembly about which they are.
+    """
+    return element.volume_quadrature(int(order))
+
+
 class FiniteStrainProblem:
     """Total-Lagrangian quasi-static finite-strain problem on a hexahedral mesh.
 
@@ -208,7 +219,7 @@ class FiniteStrainProblem:
     Parameters
     ----------
     mesh:
-        Hexahedral mesh; also fixes the element order.
+        Mesh; also fixes the element family and order.
     material:
         Constitutive law, evaluated in the local material frame.
     axes:
@@ -229,15 +240,20 @@ class FiniteStrainProblem:
 
     def __init__(
         self,
-        mesh: HexMesh,
+        mesh: Mesh,
         material: HyperelasticMaterial,
         axes: Optional[MaterialAxes] = None,
-        bulk_modulus: float = 1.0e2,
+        bulk_modulus: Optional[float] = 1.0e2,
         dirichlet: Sequence[DirichletBC] = (),
         pressures: Sequence[FollowerPressure] = (),
+        robin: Sequence[RobinBC] = (),
+        density: float = 0.0,
+        viscosity: float = 0.0,
         chunk_size: int = 2048,
         bc_atol: float = 1e-12,
         quadrature_order: Optional[int] = None,
+        surface_quadrature_order: Optional[int] = None,
+        quadrature_rule=None,
     ) -> None:
         self.mesh = mesh
         self.material = material
@@ -253,24 +269,27 @@ class FiniteStrainProblem:
         # construction.  Boundary data built on another device would otherwise
         # force a transfer on every assembly, silently, inside the hot loop.
         self.dirichlet = list(dirichlet)
-        self.pressures = [
-            bc if bc.face_set.connectivity.device == mesh.device
-            else replace(bc, face_set=bc.face_set.to(mesh.device))
-            for bc in pressures
-        ]
+        on_device = lambda bc: (bc if bc.face_set.connectivity.device == mesh.device
+                                else replace(bc, face_set=bc.face_set.to(mesh.device)))
+        self.pressures = [on_device(bc) for bc in pressures]
+        self.robin = [on_device(bc) for bc in robin]
+        self.density = float(density)
+        self.viscosity = float(viscosity)
 
         self.dtype = mesh.dtype
         self.device = mesh.device
         self.n_dofs = mesh.n_dofs
 
         order = mesh.order
-        # Includes the pressure mass matrix on curved isoparametric elements.
-        # Q2 needs four points per axis, not the usual three for affine cells.
-        n_gauss = max(order + 1, (5*order - 1)//2) if quadrature_order is None else int(quadrature_order)
+        n_gauss = (volume_quadrature_order(order, mesh.cell_element)
+                   if quadrature_order is None else int(quadrature_order))
         if n_gauss < order + 1:
             raise ValueError("quadrature_order must be at least mesh.order + 1")
-        self.elem_full = LagrangeHex(order, n_gauss, self.dtype, self.device)
-        self.face_elem = LagrangeQuad(order, order + 1, self.dtype, self.device)
+        self.elem_full = mesh.cell_element(order, n_gauss, self.dtype, self.device,
+                                           rule=quadrature_rule)
+        faces = (mesh.face_element.surface_quadrature(order)
+                 if surface_quadrature_order is None else int(surface_quadrature_order))
+        self.face_elem = mesh.face_element(order, faces, self.dtype, self.device)
 
         self.X = mesh.points
         self.cells = mesh.cells
@@ -286,13 +305,22 @@ class FiniteStrainProblem:
             reference_points=(torch.einsum("qa,eai->eqi", self.elem_full.N, self.X[self.cells])
                               if axes is not None and any(callable(v) for v in
                                   (axes.f, axes.s, axes.n)) else None))
-        self.volumetric = AugmentedLagrangian(
+        # ``None`` leaves incompressibility to the material itself, e.g. a law
+        # carrying its own volumetric penalty.
+        self.volumetric = None if bulk_modulus is None else AugmentedLagrangian(
             bulk_modulus, self.elem_full.points, self.w_full, order - 1)
         self.axes = axes
 
         self._setup_constraints()
         self._setup_assembler()
         self._eye3 = torch.eye(3, dtype=self.dtype, device=self.device)
+        # d(eta*Edot)/d(Edot): the minor-symmetriser, since the assembly
+        # contracts it with an unsymmetrised gradient operator on both sides.
+        eye = self._eye3
+        self._viscous_tangent = (self.viscosity*0.5*(
+            torch.einsum("ik,jl->ijkl", eye, eye)
+            + torch.einsum("il,jk->ijkl", eye, eye))).reshape(9, 9)
+        self._setup_linear_terms()
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (f"FiniteStrainProblem({self.mesh.n_cells} cells, "
@@ -300,7 +328,7 @@ class FiniteStrainProblem:
                 f"device={self.device}, dtype={self.dtype})")
 
     # -------------------------------------------------------------- geometry
-    def _reference_geometry(self, elem: LagrangeHex) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _reference_geometry(self, elem) -> Tuple[torch.Tensor, torch.Tensor]:
         Xe = self.X[self.cells]                                   # (ne, nen, 3)
         J0 = torch.einsum("eaI,qaj->eqIj", Xe, elem.dN)           # dX_I / dxi_j
         detJ0 = torch.linalg.det(J0)
@@ -331,13 +359,75 @@ class FiniteStrainProblem:
 
     # -------------------------------------------------------------- assembler
     def _setup_assembler(self) -> None:
-        blocks = [self.cells] + [bc.face_set.connectivity for bc in self.pressures]
+        blocks = ([self.cells]
+                  + [bc.face_set.connectivity for bc in self.pressures]
+                  + [bc.face_set.connectivity for bc in self.robin])
         self.assembler = SparseAssembler(self.n_dofs, blocks, self.device)
         self.assembler.set_constrained(self.constrained_mask)
 
+    # ------------------------------------------------------- constant matrices
+    def _setup_linear_terms(self) -> None:
+        """Assemble the matrices that never change: mass, and Robin support.
+
+        Inertia and a Robin condition are both linear and both integrated over
+        the *reference* configuration, so each is assembled once here and
+        reused at every step, rather than rebuilt inside the Newton loop.
+        """
+        self.mass = self._mass_values() if self.density else None
+        self.stiffness_support = None
+        self.damping_support = None
+        if not self.robin:
+            return
+        first = 1 + len(self.pressures)
+        stiffness = self.assembler.new_values(self.dtype)
+        damping = self.assembler.new_values(self.dtype)
+        for block, bc in enumerate(self.robin, start=first):
+            Ke, Ce = bc.matrices(self.X, self.face_elem)
+            self.assembler.accumulate(stiffness, block, Ke)
+            self.assembler.accumulate(damping, block, Ce)
+        self.stiffness_support = stiffness
+        self.damping_support = damping if bool(damping.any()) else None
+
+    def _mass_values(self) -> torch.Tensor:
+        """Consistent mass matrix, in the assembler's value layout.
+
+        Integrated on its own rule: the mass integrand carries the geometry
+        determinant as well as two shape functions, so it needs a higher degree
+        than the nonlinear terms, and it is assembled once rather than every
+        Newton iteration.  On affine cells the two rules agree.
+        """
+        values = self.assembler.new_values(self.dtype)
+        order = self.mesh.order
+        elem = self.mesh.cell_element(order, self.mesh.cell_element.mass_quadrature(
+            order), self.dtype, self.device)
+        N = elem.N
+        for start in range(0, self.mesh.n_cells, self.chunk_size):
+            sl = slice(start, min(start + self.chunk_size, self.mesh.n_cells))
+            # Only the determinant of the reference map, not its inverse or the
+            # physical gradients: mass needs neither, and on a large mesh at
+            # this rule they would be the largest arrays in the assembly.
+            J0 = torch.einsum("eaI,qaj->eqIj", self.X[self.cells[sl]], elem.dN)
+            gram = self.density*torch.einsum(
+                "eq,qa,qb->eab", elem.weights[None, :]*torch.linalg.det(J0), N, N)
+            Me = (gram[:, :, None, :, None]
+                  * self._eye3[None, None, :, None, :]).reshape(
+                      gram.shape[0], -1, gram.shape[-1]*3)
+            values.index_add_(
+                0, self.assembler.scatter(0)[start*Me.shape[-1]**2:
+                                             sl.stop*Me.shape[-1]**2],
+                Me.reshape(-1))
+        return values
+
     # --------------------------------------------------------------- kernels
-    def _contribution(self, F, S, D9, dNdX, w, tangent):
-        """Element force (and stiffness) for one stress measure and quadrature rule."""
+    def _contribution(self, F, S, D9, dNdX, w, tangent, rate=None):
+        """Element force (and stiffness) for one stress measure and quadrature rule.
+
+        ``rate`` adds a second tangent branch ``(D, F_trial)`` whose trial side
+        uses ``F_trial`` instead of ``F``: a rate-dependent stress is linear in
+        the velocity, and the velocity depends on the displacement through the
+        time integrator, so its trial operator is built from a different
+        deformation gradient than the test one.
+        """
         P = torch.einsum("eqiI,eqIJ->eqiJ", F, S)
         fe = torch.einsum("eq,eqiJ,eqaJ->eai", w, P, dNdX)
         if not tangent:
@@ -347,6 +437,13 @@ class FiniteStrainProblem:
         M = torch.einsum("eqiI,eqaJ->eqaiIJ", F, dNdX).reshape(ne, nq, nen * 3, 9)
         T = torch.einsum("eqAm,eqmn->eqAn", M, D9)
         K = torch.einsum("eq,eqAn,eqBn->eAB", w, T, M)
+
+        if rate is not None:
+            D9_rate, F_trial = rate
+            B = torch.einsum("eqiI,eqaJ->eqaiIJ", F_trial, dNdX
+                             ).reshape(ne, nq, nen * 3, 9)
+            K = K + torch.einsum("eq,eqAn,eqBn->eAB", w,
+                                 torch.einsum("eqAm,mn->eqAn", M, D9_rate), B)
 
         G = torch.einsum("eqaI,eqIJ,eqbJ->eqab", dNdX, S, dNdX)
         Kg = torch.einsum("eq,eqab->eab", w, G)
@@ -358,7 +455,9 @@ class FiniteStrainProblem:
         return torch.einsum("eai,eqaI->eqiI", xe, dNdX)
 
     # ---------------------------------------------------------------- assembly
-    def evaluate(self, u: torch.Tensor, load_factor: float = 1.0, tangent: bool = True
+    def evaluate(self, u: torch.Tensor, load_factor: float = 1.0, tangent: bool = True,
+                 velocity: Optional[torch.Tensor] = None,
+                 velocity_scale: float = 0.0, time: float = 0.0
                  ) -> Tuple[torch.Tensor, Optional[torch.Tensor], AssemblyInfo]:
         """Assemble the residual (and tangent values) at displacement ``u``.
 
@@ -366,8 +465,14 @@ class FiniteStrainProblem:
         ``tangent=False``, and every diagnostic in ``info`` is still a device
         tensor -- see :class:`AssemblyInfo`.  Nothing in this method transfers
         to the host.
+
+        ``velocity`` supplies the rate-dependent response -- Kelvin-Voigt
+        viscosity and Robin damping.  ``velocity_scale`` is ``d(velocity)/du``
+        from the time integrator, which the tangent of those terms needs.
+        Leaving both out is the quasi-static case.
         """
         xc = self.X + u.reshape(-1, 3)
+        ve = None if velocity is None else velocity.reshape(-1, 3)
         R = torch.zeros(self.n_dofs, dtype=self.dtype, device=self.device)
         values = self.assembler.new_values(self.dtype) if tangent else None
 
@@ -384,18 +489,45 @@ class FiniteStrainProblem:
             # ---- isochoric response, full quadrature -------------------------
             F = self._deformation_gradient(xe, self.dNdX_full[sl])
             E = 0.5 * (torch.einsum("eqiI,eqiJ->eqIJ", F, F) - self._eye3)
-            S, D9 = self.oriented.response(E, sl, tangent, load_factor=load_factor)
-            Sv, Dv9, J = self.volumetric.response(F, sl, tangent)
-            fe, Ke = self._contribution(
-                F, S + Sv, D9 + Dv9 if tangent else None,
-                self.dNdX_full[sl], self.w_full[sl], tangent)
+            S, D9 = self.oriented.response(E, sl, tangent, load_factor=load_factor,
+                                           time=time)
+            if self.volumetric is None:
+                J = torch.linalg.det(F)
+            else:
+                Sv, Dv9, J = self.volumetric.response(F, sl, tangent)
+                S = S + Sv
+                D9 = D9 + Dv9 if tangent else None
+
+            rate = None
+            if ve is not None and self.viscosity:
+                Fdot = self._deformation_gradient(ve[self.cells[sl]],
+                                                  self.dNdX_full[sl])
+                S = S + self.viscosity*0.5*(
+                    torch.einsum("eqiI,eqiJ->eqIJ", Fdot, F)
+                    + torch.einsum("eqiI,eqiJ->eqIJ", F, Fdot))
+                if tangent:
+                    rate = (self._viscous_tangent, velocity_scale*F + Fdot)
+
+            fe, Ke = self._contribution(F, S, D9, self.dNdX_full[sl],
+                                        self.w_full[sl], tangent, rate)
             min_J.append(J.amin())
 
             R.index_add_(0, edofs[sl].reshape(-1), fe.reshape(-1))
             if tangent:
-                Ke = Ke + self.volumetric.stiffness(F, self.dNdX_full[sl], sl)
+                if self.volumetric is not None:
+                    Ke = Ke + self.volumetric.stiffness(F, self.dNdX_full[sl], sl)
                 values.index_add_(0, scatter[start * nd * nd: stop * nd * nd],
                                   Ke.reshape(-1))
+
+        # Elastic and viscous support: linear, so a matrix-vector product.
+        if self.stiffness_support is not None:
+            R += self.assembler.to_csr(self.stiffness_support) @ u
+            if tangent:
+                values += self.stiffness_support
+        if self.damping_support is not None and velocity is not None:
+            R += self.assembler.to_csr(self.damping_support) @ velocity
+            if tangent:
+                values += velocity_scale*self.damping_support
 
         # Scale of the internal force *before* the external load is subtracted.
         # This, not the applied load, is the natural normaliser for the residual:
@@ -403,7 +535,7 @@ class FiniteStrainProblem:
         # pressure that drives it.
         fint_norm = torch.linalg.vector_norm(R)
 
-        fext_norm = self._add_pressure(xc, R, values, load_factor, tangent)
+        fext_norm = self._add_pressure(xc, R, values, load_factor, tangent, time)
 
         return R, values, AssemblyInfo(
             min_jacobian=torch.stack(min_J).amin(),
@@ -412,12 +544,12 @@ class FiniteStrainProblem:
             residual_norm=self.constraints.free_norm(R),
         )
 
-    def _add_pressure(self, xc, R, values, load_factor, tangent) -> torch.Tensor:
+    def _add_pressure(self, xc, R, values, load_factor, tangent, time=0.0) -> torch.Tensor:
         """Scatter each surface load's own contribution into the system."""
         external = torch.zeros((), dtype=self.dtype, device=self.device)
         for block, bc in enumerate(self.pressures, start=1):
             force, stiffness = bc.contribution(xc, self.face_elem, load_factor,
-                                               tangent)
+                                               tangent, time)
             external = external + (force ** 2).sum()
             R.index_add_(0, self.assembler.element_dofs[block].reshape(-1),
                          -force.reshape(-1))
@@ -447,7 +579,7 @@ class FiniteStrainProblem:
         """
         if n_gauss is None:
             return self.jacobians(u), self.w_full
-        elem = LagrangeHex(self.mesh.order, n_gauss, self.dtype, self.device)
+        elem = self.mesh.cell_element(self.mesh.order, n_gauss, self.dtype, self.device)
         dNdX, w = self._reference_geometry(elem)
         xc = self.X + u.reshape(-1, 3)
         out = []
@@ -470,6 +602,8 @@ class FiniteStrainProblem:
 
     def volume_error(self, u: torch.Tensor) -> float:
         """Maximum projected volume residual of the mixed constraint."""
+        if self.volumetric is None:
+            return 0.0
         return float(self.volumetric.residual(self.jacobians(u)).abs().max())
 
     def volume_diagnostics(self, u: torch.Tensor,
@@ -485,8 +619,11 @@ class FiniteStrainProblem:
         Jr = self.jacobians(u)
         Jf, w = self.sample_jacobians(u, n_gauss)
         v0 = w.sum()
+        constraint = (torch.zeros((), dtype=self.dtype, device=self.device)
+                      if self.volumetric is None
+                      else self.volumetric.residual(Jr).abs().amax())
         stats = torch.stack([
-            self.volumetric.residual(Jr).abs().amax(),
+            constraint,
             (Jf - 1.0).abs().amax(),
             (((Jf - 1.0) ** 2 * w).sum() / v0).sqrt(),
             (Jf * w).sum() / v0 - 1.0,
@@ -498,16 +635,19 @@ class FiniteStrainProblem:
     @property
     def p_bar(self) -> torch.Tensor:
         """The incompressibility multiplier field (owned by :attr:`volumetric`)."""
-        return self.volumetric.multiplier
+        return None if self.volumetric is None else self.volumetric.multiplier
 
     def update_multipliers(self, u: torch.Tensor) -> float:
         """Uzawa update of the multiplier; returns ``max |J - 1|``."""
         J = self.jacobians(u)
+        if self.volumetric is None:
+            return 0.0
         self.volumetric.update(J)
         return float(self.volumetric.residual(J).abs().max())
 
     def reset_multipliers(self) -> None:
-        self.volumetric.reset()
+        if self.volumetric is not None:
+            self.volumetric.reset()
 
     # ---------------------------------------------------------------- helpers
     def deformed_points(self, u: torch.Tensor) -> torch.Tensor:

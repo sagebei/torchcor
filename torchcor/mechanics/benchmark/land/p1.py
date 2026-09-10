@@ -289,7 +289,8 @@ def write_figure(solution: BeamSolution, path: str = "beam.png") -> Path:
 #  Running it
 # =============================================================================
 def main(argv: list[str] | None = None) -> int:
-    args = reporting.arguments(__doc__.splitlines()[0], argv)
+    args = reporting.arguments(__doc__.splitlines()[0], argv,
+                               default_out=Path(__file__).with_name("p1"))
     meshes = [tuple(args.mesh)] if args.mesh else MESHES
     solutions = [solve_beam(m, device=args.device) for m in meshes]
     passed = report_benchmark(solutions)

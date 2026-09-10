@@ -37,6 +37,16 @@ The submodules are imported here too, so ``torchcor.mechanics.mesh`` and
 friends are available after a plain ``import torchcor.mechanics``.
 """
 
+import warnings
+
+# Every sparse matrix in this package is CSR -- the assembly, the Krylov
+# solvers and the benchmark's Laplace solve all build one -- so PyTorch's
+# beta-status notice fires from several places and says nothing a reader of
+# this code can act on. Silenced here, once, rather than at each call site.
+warnings.filterwarnings(
+    "ignore", category=UserWarning,
+    message="Sparse CSR tensor support is in beta state")
+
 from torchcor.mechanics import (
     assembly,
     boundary,

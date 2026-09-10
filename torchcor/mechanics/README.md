@@ -1,13 +1,18 @@
 # TorchCor mechanics
 
-This module solves quasi-static, finite-strain mechanics with PyTorch CUDA
-tensors. The mesh sets the device and precision; the benchmark examples use
-quadratic hexahedra and `torch.float64`. CPU compatibility is not a development
-requirement.
+This module solves quasi-static and dynamic finite-strain mechanics with
+PyTorch CUDA tensors. The mesh sets the device and precision, and it also sets
+the element family: [mesh.py](mesh.py) provides tensor-product hexahedra of any
+order (`HexMesh`) and tetrahedra of order one or two (`TetMesh`), which is what
+stored meshes contain. Everything above the mesh is written against whichever
+it holds. The benchmark examples use quadratic elements and `torch.float64`.
+CPU compatibility is not a development requirement.
 
-The completed P1/P2 results, independent tests, timings, and remaining limits
-are recorded in the [verification report](benchmark/validation/takeover/REPORT.md).
-The [P3 report](benchmark/validation/p3/REPORT.md) covers active contraction,
+The CUDA regression suite is in [tests/](tests/); run it with
+`TORCHCOR_TEST_DEVICE=cuda:0 python -m unittest discover -s torchcor/mechanics/tests -t .`.
+Benchmark results, with the reference data they are scored against, live beside
+each runner under [benchmark/](benchmark/).
+The [P3 report](benchmark/land/p3.py) covers active contraction,
 signed twist, and the additional checks on spatial fibre directions.
 
 ## Set up a simulation
@@ -50,7 +55,7 @@ Lagrangian updates enforce incompressibility in a discrete pressure space.
 An unsuccessful increment restores the accepted displacement and multiplier
 state before retrying at a smaller increment.
 
-Quadratic hexahedra use four discontinuous pressure modes per element.
+Quadratic elements use four discontinuous pressure modes per element.
 Pressure and dilatation are eliminated locally at each augmentation iteration,
 leaving a displacement system for the sparse linear solver. Physical-volume
 weights and the derivative of this elimination appear in both residual and
@@ -58,10 +63,12 @@ tangent. [The formulation note](FORMULATION.md) gives the
 equations, established references, and independent checks. This is a PyTorch
 implementation of those equations, not the same numerical solver as deal.II.
 
-The general solver uses residual backtracking and preconditioned BiCGStab.
+The general solver uses a critical-point line search on the energy slope and
+a preconditioned Krylov method chosen from the tangent's measured symmetry:
+conjugate gradients when it is symmetric, BiCGStab when it is not.
 `sim.solve(line_search="none")` explicitly selects full Newton steps. The
 P1 runner selects that option for its measured performance baseline; P2 uses
-backtracking. Neither option guarantees convergence for every load or material.
+Neither option guarantees convergence for every load or material.
 The nonlinear driver's default linear relative tolerance is `1e-6`; force
 and mixed-volume convergence retain their separate, stricter tolerances.
 `IsochoricMaterial` removes the passive law's volume-changing response. For
@@ -96,26 +103,36 @@ separate RMS and maximum `J-1` errors in `sim.volume_report()`: `J=1` means
 unchanged material volume. Expansion and compression can cancel in the total
 volume, and finite sampling cannot bound every point inside an element.
 
-The ventricular mesh has a collapsed apex. Positive sampled Jacobians and
-agreement at the apex do not prove stability of these elements under every
-deformation. Check directional refinement and local errors, especially before
-claiming accuracy near the apex of the twisting active problem. The supported
-scope is static 3D hexahedral mechanics; passing benchmark position checks does
-not establish uniformly accurate local volume preservation.
+The structured ventricular mesh has a collapsed apex. Positive sampled
+Jacobians and agreement at the apex do not prove stability of these elements
+under every deformation. Check directional refinement and local errors,
+especially before claiming accuracy near the apex of the twisting active
+problem. The supported scope is 3D hexahedral and tetrahedral mechanics,
+quasi-static or dynamic; passing benchmark position checks does not establish
+uniformly accurate local volume preservation.
 
-## Run benchmarks and tests
+## Run the benchmarks
 
 From the repository root, run one mesh or omit `--mesh` for a refinement study:
 
 ```bash
-python -m torchcor.mechanics.benchmark.p1 --device cuda:0 --mesh 20 2 2 --out torchcor/mechanics/benchmark/results/p1
-python -m torchcor.mechanics.benchmark.p2 --device cuda:0 --mesh 2 12 24 --out torchcor/mechanics/benchmark/results/p2
-python -m torchcor.mechanics.benchmark.p3 --device cuda:1 --mesh 3 16 32 --out torchcor/mechanics/benchmark/results/p3
-TORCHCOR_TEST_DEVICE=cuda:0 python -m unittest discover -s torchcor/mechanics/tests -v
+python -m torchcor.mechanics.benchmark.land.p1 --device cuda:0 --mesh 20 2 2
+python -m torchcor.mechanics.benchmark.land.p2 --device cuda:0 --mesh 2 12 24
+python -m torchcor.mechanics.benchmark.land.p3 --device cuda:1 --mesh 3 16 32
 ```
 
+Each runner writes its JSON and figures into its own folder beside the scripts
+(`benchmark/land/p1`, `p2`, `p3`); `--out DIR` overrides that. Once all three
+have run, `python torchcor/mechanics/benchmark/land/export_csv.py` collects
+every plotted quantity into `benchmark/land/torchcor_land.csv`, one row per
+point, tagged with the figure of Land et al. it belongs to.
+
+One benchmark lives per folder under `benchmark/`, so a second suite is added
+alongside `land/` rather than into it; `benchmark/report.py` holds the
+argument, JSON and figure helpers they share.
+
 The benchmark runners write numeric JSON and comparison figures. Their 1%
-position criterion is a project check; the [Land et al. paper](resources/benchmark.pdf)
+position criterion is a project check; the [Land et al. paper](resources/Land.pdf)
 does not prescribe an executable pass rule. The strain guides are approximate
 figure readings for P1/P2. P3 uses a published participant's apex table and
 also checks the sign of twist; no numerical strain reference was available

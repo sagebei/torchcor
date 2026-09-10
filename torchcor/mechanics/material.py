@@ -20,8 +20,36 @@ import torch
 
 
 __all__ = ["HyperelasticMaterial", "GuccioneMaterial", "NeoHookeanMaterial",
-           "ActiveStressMaterial", "IsochoricMaterial", "MaterialAxes",
+           "ActiveStressMaterial", "IsochoricMaterial", "HolzapfelOgdenMaterial",
+           "MaterialAxes",
            "OrientedMaterial", "AugmentedLagrangian"]
+
+
+def _determinant(A: torch.Tensor) -> torch.Tensor:
+    """Batched 3x3 determinant using elementwise tensor operations.
+
+    Used instead of ``torch.linalg.det`` because that returns wrong
+    derivatives under ``vmap(jacfwd(...))`` on CPU for batches above one,
+    which is how the tangents here are taken.
+    """
+    return (A[..., 0, 0]*(A[..., 1, 1]*A[..., 2, 2] - A[..., 1, 2]*A[..., 2, 1])
+            - A[..., 0, 1]*(A[..., 1, 0]*A[..., 2, 2] - A[..., 1, 2]*A[..., 2, 0])
+            + A[..., 0, 2]*(A[..., 1, 0]*A[..., 2, 1] - A[..., 1, 1]*A[..., 2, 0]))
+
+
+def _inverse(A: torch.Tensor, determinant: Optional[torch.Tensor] = None
+             ) -> torch.Tensor:
+    """Batched 3x3 inverse by cofactors, for the same reason as above."""
+    if determinant is None:
+        determinant = _determinant(A)
+    a, b, c = A[..., 0, 0], A[..., 0, 1], A[..., 0, 2]
+    d, e, f = A[..., 1, 0], A[..., 1, 1], A[..., 1, 2]
+    g, h, i = A[..., 2, 0], A[..., 2, 1], A[..., 2, 2]
+    adjugate = torch.stack([
+        torch.stack([e*i - f*h, c*h - b*i, b*f - c*e], dim=-1),
+        torch.stack([f*g - d*i, a*i - c*g, c*d - a*f], dim=-1),
+        torch.stack([d*h - e*g, b*g - a*h, a*e - b*d], dim=-1)], dim=-2)
+    return adjugate/determinant[..., None, None]
 
 
 class HyperelasticMaterial(ABC):
@@ -57,8 +85,10 @@ class HyperelasticMaterial(ABC):
         """Return this law restricted to a cell batch; uniform laws are shared."""
         return self
 
-    def at_load(self, factor: float):
-        """Return this law at a load factor; passive laws are unchanged."""
+    def at_load(self, factor: float, time: float = 0.0):
+        """Return this law at a continuation factor and time; passive laws are
+        unchanged.  A constant tension is scaled by ``factor``; a schedule is a
+        function of ``time``."""
         return self
 
 
@@ -183,8 +213,10 @@ class ActiveStressMaterial(HyperelasticMaterial):
     passive:
         The underlying law, e.g. :class:`GuccioneMaterial`.
     tension:
-        Active fibre tension, in the stress units of the passive law.  A scalar
-        applies everywhere. Use ``(n_cells, 1)`` for one value per cell or
+        Active fibre tension, in the stress units of the passive law.  A
+        callable is a *schedule*, evaluated at the load parameter -- which a
+        time integrator sets to the current time -- and must be spatially
+        uniform.  A scalar applies everywhere. Use ``(n_cells, 1)`` for one value per cell or
         ``(n_cells, n_quadrature)`` for a quadrature field. A ``(n_quadrature,)``
         or ``(1, n_quadrature)`` field is shared by every cell. Fields are moved
         to the solver's device once and sliced with each assembly batch.
@@ -209,6 +241,11 @@ class ActiveStressMaterial(HyperelasticMaterial):
                 f"ramp={self.ramp})")
 
     def to(self, dtype: torch.dtype, device: torch.device, *, batch_shape=None):
+        if callable(self.tension):
+            # A schedule is resolved per step by at_load, not prepared here.
+            return ActiveStressMaterial(
+                self.passive.to(dtype, device, batch_shape=batch_shape),
+                self.tension, ramp=self.ramp)
         tension = torch.as_tensor(self.tension, dtype=dtype, device=device)
         if tension.ndim > 2 or not bool(torch.isfinite(tension).all()):
             raise ValueError("active tension must be finite and have at most two dimensions")
@@ -227,6 +264,9 @@ class ActiveStressMaterial(HyperelasticMaterial):
 
     def for_cells(self, cells: slice):
         passive = self.passive.for_cells(cells)
+        if callable(self.tension):
+            return (self if passive is self.passive else
+                    ActiveStressMaterial(passive, self.tension, ramp=self.ramp))
         tension = torch.as_tensor(self.tension)
         if tension.ndim == 2 and tension.shape[0] != 1:
             tension = tension[cells]
@@ -234,8 +274,10 @@ class ActiveStressMaterial(HyperelasticMaterial):
             return self
         return ActiveStressMaterial(passive, tension, ramp=self.ramp)
 
-    def at_load(self, factor: float):
-        passive = self.passive.at_load(factor)
+    def at_load(self, factor: float, time: float = 0.0):
+        passive = self.passive.at_load(factor, time)
+        if callable(self.tension):
+            return ActiveStressMaterial(passive, self.tension(time))
         if self.ramp:
             return ActiveStressMaterial(passive, torch.as_tensor(self.tension)*factor)
         return self if passive is self.passive else ActiveStressMaterial(passive, self.tension)
@@ -308,16 +350,11 @@ class IsochoricMaterial(HyperelasticMaterial):
         passive = self.passive.for_cells(cells)
         return self if passive is self.passive else IsochoricMaterial(passive)
 
-    def at_load(self, factor: float):
-        passive = self.passive.at_load(factor)
+    def at_load(self, factor: float, time: float = 0.0):
+        passive = self.passive.at_load(factor, time)
         return self if passive is self.passive else IsochoricMaterial(passive)
 
-    @staticmethod
-    def _determinant(A: torch.Tensor) -> torch.Tensor:
-        """Batched 3x3 determinant using elementwise tensor operations."""
-        return (A[..., 0, 0]*(A[..., 1, 1]*A[..., 2, 2] - A[..., 1, 2]*A[..., 2, 1])
-                - A[..., 0, 1]*(A[..., 1, 0]*A[..., 2, 2] - A[..., 1, 2]*A[..., 2, 0])
-                + A[..., 0, 2]*(A[..., 1, 0]*A[..., 2, 1] - A[..., 1, 1]*A[..., 2, 0]))
+    _determinant = staticmethod(_determinant)
 
     def _kinematics(self, E: torch.Tensor):
         """Volume split without synchronizing CUDA on a singular trial state."""
@@ -369,6 +406,190 @@ class IsochoricMaterial(HyperelasticMaterial):
              + (2.0*trace/3.0)[..., None, None, None, None]
              * (inverse_symmetric - inverse_outer/3.0))
         return S, D
+
+
+class HolzapfelOgdenMaterial(HyperelasticMaterial):
+    r"""Orthotropic myocardium law of Holzapfel and Ogden (2009).
+
+    Written in the local frame, so the fibre is ``e_1`` and the sheet ``e_2``
+    and every invariant is a component of ``C``:
+
+    .. math::
+
+        \Psi = \frac{a}{2b}e^{b(\bar{I}_1 - 3)}
+             + \sum_{i \in \{f, s\}} \frac{a_i}{2b_i}
+               \chi(I_{4i})\left(e^{b_i(I_{4i} - 1)^2} - 1\right)
+             + \frac{a_{fs}}{2b_{fs}}\left(e^{b_{fs}I_{8fs}^2} - 1\right)
+             + \frac{\kappa}{4}\left(J^2 - 1 - 2\ln J\right)
+
+    with :math:`\bar{I}_1 = J^{-2/3}\operatorname{tr}C`,
+    :math:`I_{4f} = C_{11}`, :math:`I_{4s} = C_{22}` and
+    :math:`I_{8fs} = C_{12}`.
+
+    ``chi`` is the fibre compression switch: collagen carries tension but not
+    compression, so the fibre and sheet terms are turned off below
+    :math:`I_{4i} = 1`.  It is the logistic
+    :math:`\chi(x) = (1 + e^{-k(x-1)})^{-1}`, smooth so that the tangent stays
+    continuous through the switch; ``k`` sets how sharp it is.
+
+    Parameters
+    ----------
+    a, b, a_f, b_f, a_s, b_s, a_fs, b_fs:
+        Stress-valued ``a`` moduli and dimensionless ``b`` exponents.
+    bulk_modulus:
+        ``kappa`` of the volumetric penalty above.  Zero -- the default --
+        drops that penalty, for use with a separate incompressibility model
+        such as :class:`AugmentedLagrangian`.  It does not make the law
+        deviatoric: only the isotropic term is written on the volume-preserving
+        part, while the fibre, sheet and shear terms use the unsplit
+        invariants and so still respond to volume change.
+    compression_switch:
+        ``k`` above.  Larger is a sharper switch and a stiffer tangent near
+        :math:`I_{4i} = 1`.
+
+    Notes
+    -----
+    The stress is analytic; the tangent is the forward-mode derivative of it,
+    so the two are consistent by construction rather than by hand algebra.
+    """
+
+    def __init__(self, a: float, b: float, a_f: float, b_f: float,
+                 a_s: float, b_s: float, a_fs: float, b_fs: float, *,
+                 bulk_modulus: float = 0.0,
+                 compression_switch: float = 100.0) -> None:
+        self.a, self.b = float(a), float(b)
+        self.a_f, self.b_f = float(a_f), float(b_f)
+        self.a_s, self.b_s = float(a_s), float(b_s)
+        self.a_fs, self.b_fs = float(a_fs), float(b_fs)
+        self.bulk_modulus = float(bulk_modulus)
+        self.compression_switch = float(compression_switch)
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return (f"HolzapfelOgdenMaterial(a={self.a}, b={self.b}, "
+                f"a_f={self.a_f}, b_f={self.b_f}, a_s={self.a_s}, "
+                f"b_s={self.b_s}, a_fs={self.a_fs}, b_fs={self.b_fs}, "
+                f"bulk_modulus={self.bulk_modulus})")
+
+    def energy(self, E: torch.Tensor) -> torch.Tensor:
+        """Strain energy per unit reference volume; the tests differentiate it."""
+        eye = torch.eye(3, dtype=E.dtype, device=E.device)
+        C = 2.0*E + eye
+        J2 = _determinant(C)
+        Ibar1 = J2.pow(-1.0/3.0)*C.diagonal(dim1=-2, dim2=-1).sum(-1)
+
+        psi = self.a/(2.0*self.b)*torch.exp(self.b*(Ibar1 - 3.0))
+        for I4, a_i, b_i in ((C[..., 0, 0], self.a_f, self.b_f),
+                             (C[..., 1, 1], self.a_s, self.b_s)):
+            switch = torch.sigmoid(self.compression_switch*(I4 - 1.0))
+            psi = psi + a_i/(2.0*b_i)*switch*torch.expm1(b_i*(I4 - 1.0).square())
+        I8 = C[..., 0, 1]
+        psi = psi + self.a_fs/(2.0*self.b_fs)*torch.expm1(self.b_fs*I8.square())
+        if self.bulk_modulus:
+            psi = psi + self.bulk_modulus/4.0*(J2 - 1.0 - torch.log(J2))
+        return psi
+
+    def stress(self, E: torch.Tensor) -> torch.Tensor:
+        eye = torch.eye(3, dtype=E.dtype, device=E.device)
+        C = 2.0*E + eye
+        J2 = _determinant(C)
+        Cinv = _inverse(C, J2)
+        I1 = C.diagonal(dim1=-2, dim2=-1).sum(-1)
+        scale = J2.pow(-1.0/3.0)
+        Ibar1 = scale*I1
+
+        # Isotropic, on the volume-preserving part only.
+        dpsi = self.a/2.0*torch.exp(self.b*(Ibar1 - 3.0))
+        S = (2.0*dpsi*scale)[..., None, None]*(eye - (I1/3.0)[..., None, None]*Cinv)
+
+        # Fibre and sheet: each invariant is one diagonal entry of C, so its
+        # derivative is a single unit dyad and the stress is a scalar there.
+        S = S.clone()
+        for k, (a_i, b_i) in enumerate(((self.a_f, self.b_f),
+                                        (self.a_s, self.b_s))):
+            I4 = C[..., k, k]
+            switch = torch.sigmoid(self.compression_switch*(I4 - 1.0))
+            grown = torch.expm1(b_i*(I4 - 1.0).square())
+            dswitch = self.compression_switch*switch*(1.0 - switch)
+            dpsi = a_i/(2.0*b_i)*(dswitch*grown
+                                  + switch*2.0*b_i*(I4 - 1.0)*(grown + 1.0))
+            S[..., k, k] = S[..., k, k] + 2.0*dpsi
+
+        # Fibre-sheet shear: dI8/dC is the symmetrised dyad, giving equal
+        # off-diagonal entries.
+        I8 = C[..., 0, 1]
+        shear = self.a_fs*I8*torch.exp(self.b_fs*I8.square())
+        S[..., 0, 1] = S[..., 0, 1] + shear
+        S[..., 1, 0] = S[..., 1, 0] + shear
+
+        if self.bulk_modulus:
+            S = S + (self.bulk_modulus/2.0*(J2 - 1.0))[..., None, None]*Cinv
+        return S
+
+    def stress_and_tangent(self, E: torch.Tensor
+                           ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Second Piola-Kirchhoff stress and ``dS/dE``, both in closed form.
+
+        This is the law the cardiac benchmarks integrate, and the tangent is
+        the assembly's dominant cost, so it is differentiated by hand rather
+        than by ``jacfwd``: same result, a fraction of the work.  ``E`` is
+        differentiated as nine independent components and the result
+        symmetrised in ``(k, l)``, exactly as the automatic version did;
+        ``tests/test_materials.py`` holds both to the energy.
+        """
+        eye = torch.eye(3, dtype=E.dtype, device=E.device)
+        C = 2.0*E + eye
+        J2 = _determinant(C)
+        Cinv = _inverse(C, J2)
+        I1 = C.diagonal(dim1=-2, dim2=-1).sum(-1)
+        g = J2.pow(-1.0/3.0)
+        outer = lambda a, b: a[..., :, :, None, None]*b[..., None, None, :, :]
+
+        # dJ2/dC = J2 C^-T and d(C^-1)_ij/dC_kl = -(C^-1)_ik (C^-1)_lj, both
+        # for a C whose nine entries move independently.
+        CinvT = Cinv.mT
+        dCinv = -torch.einsum("...ik,...lj->...ijkl", Cinv, Cinv)
+
+        # --- isotropic, on the volume-preserving part only
+        A = g[..., None, None]*(eye - (I1/3.0)[..., None, None]*Cinv)
+        expo = torch.exp(self.b*(g*I1 - 3.0))
+        # dA_ij/dC_kl, from dg/dC = -(g/3) C^-T and dI1/dC = I.
+        dg = -(g/3.0)[..., None, None]*CinvT
+        dA = torch.einsum("...kl,ij->...ijkl", dg, eye)
+        dA = dA - torch.einsum("...kl,...ij->...ijkl",
+                               (dg*I1[..., None, None] + g[..., None, None]*eye)/3.0,
+                               Cinv)
+        dA = dA - (g*I1/3.0)[..., None, None, None, None]*dCinv
+        D = 2.0*self.a*(self.b*expo[..., None, None, None, None]*outer(A, A)
+                        + expo[..., None, None, None, None]*dA)
+
+        # --- fibre and sheet: each reads one diagonal entry of C
+        for k, (a_i, b_i) in enumerate(((self.a_f, self.b_f),
+                                        (self.a_s, self.b_s))):
+            I4 = C[..., k, k]
+            switch = torch.sigmoid(self.compression_switch*(I4 - 1.0))
+            grown = torch.expm1(b_i*(I4 - 1.0).square())
+            d1 = self.compression_switch*switch*(1.0 - switch)
+            d2 = d1*self.compression_switch*(1.0 - 2.0*switch)
+            second = a_i/(2.0*b_i)*(
+                d2*grown
+                + 2.0*d1*2.0*b_i*(I4 - 1.0)*(grown + 1.0)
+                + switch*2.0*b_i*(grown + 1.0)*(1.0 + 2.0*b_i*(I4 - 1.0).square()))
+            D[..., k, k, k, k] = D[..., k, k, k, k] + 4.0*second
+
+        # --- fibre-sheet shear: reads C[0, 1] alone, so the derivative lands
+        # entirely on l = 1 and the symmetrisation below halves it onto l = 0.
+        I8 = C[..., 0, 1]
+        shear = 2.0*self.a_fs*torch.exp(self.b_fs*I8.square())*(
+            1.0 + 2.0*self.b_fs*I8.square())
+        D[..., 0, 1, 0, 1] = D[..., 0, 1, 0, 1] + shear
+        D[..., 1, 0, 0, 1] = D[..., 1, 0, 0, 1] + shear
+
+        if self.bulk_modulus:
+            D = D + (self.bulk_modulus*J2)[..., None, None, None, None]*outer(Cinv, CinvT)
+            D = D + (self.bulk_modulus*(J2 - 1.0))[..., None, None, None, None]*dCinv
+
+        D = 0.5*(D + D.transpose(-2, -1))          # minor symmetry in (k, l)
+        return self.stress(E), D
 
 
 @dataclass
@@ -475,7 +696,10 @@ class OrientedMaterial:
     skipped entirely, so an isotropic or axis-aligned problem pays nothing.
 
     The tangent is returned in 9x9 form, which is what the assembly contracts
-    against.
+    against.  Only the 3x3 frame is kept: the 9x9 operator is nine times larger
+    per point, and on a fine mesh with a spatially varying frame that dominates
+    the assembly's memory.  It is rebuilt for the cells being assembled, where
+    it is a small transient.
     """
 
     def __init__(self, material: HyperelasticMaterial,
@@ -484,7 +708,7 @@ class OrientedMaterial:
                  reference_points: Optional[torch.Tensor] = None) -> None:
         self.material = material.to(dtype, device, batch_shape=batch_shape)
         self.axes = axes
-        self.rotation: Optional[torch.Tensor] = None
+        self.frame: Optional[torch.Tensor] = None
         self.per_cell = False
 
         if axes is None:
@@ -503,27 +727,30 @@ class OrientedMaterial:
         eye = torch.eye(3, dtype=dtype, device=device)
         if R.dim() == 2 and torch.allclose(R, eye, atol=1e-14):
             return                                  # identity frame: no rotation
-        self.rotation = MaterialAxes.voigt9_rotation(R)
-        self.per_cell = self.rotation.dim() > 2
+        self.frame = R
+        self.per_cell = R.dim() > 3
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
-        frame = "global axes" if self.rotation is None else (
+        frame = "global axes" if self.frame is None else (
             "spatial frame" if self.per_cell else "uniform frame")
         return f"OrientedMaterial({self.material!r}, {frame})"
 
     def response(self, E: torch.Tensor, cells: slice = slice(None),
-                 tangent: bool = True, load_factor: float = 1.0
+                 tangent: bool = True, load_factor: float = 1.0,
+                 time: float = 0.0
                  ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Stress and (optionally) the 9x9 tangent, both in the global frame."""
-        material = self.material.for_cells(cells).at_load(load_factor)
-        if self.rotation is None:
+        material = self.material.for_cells(cells).at_load(load_factor, time)
+        if self.frame is None:
             if not tangent:
                 return material.stress(E), None
             S, D = material.stress_and_tangent(E)
             return S, D.reshape(D.shape[:-4] + (9, 9))
 
-        Q = (self.rotation[cells] if self.per_cell and self.rotation.shape[0] != 1
-             else self.rotation)
+        # Built here rather than cached: nine times the frame's size per point.
+        R = (self.frame[cells] if self.per_cell and self.frame.shape[0] != 1
+             else self.frame)
+        Q = MaterialAxes.voigt9_rotation(R)
 
         E_local = torch.einsum("...mn,...n->...m", Q, E.flatten(-2)).reshape(E.shape)
         if not tangent:

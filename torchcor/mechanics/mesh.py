@@ -1,31 +1,45 @@
 """Mesh generation and geometry utilities for :mod:`torchcor.mechanics`.
 
-The mechanics module works with *tensor-product* (Lagrange) hexahedral meshes of
-arbitrary polynomial order ``p``.  Hexahedra are used rather than tetrahedra
-because a tensor-product basis keeps every kernel in the solver a batched
-``einsum`` over regular arrays, which is what a GPU wants, and because
-high-order hexahedra are the standard remedy for the volumetric locking that
-plagues nearly incompressible cardiac tissue.
+Two element families are supported, and :class:`Mesh` holds everything that
+does not depend on which one a mesh uses -- sizes, named sets, interpolation
+and point location -- so the solver never asks.
+
+:class:`HexMesh` is *tensor-product* (Lagrange) of arbitrary order ``p``, and
+is what a mesh built here uses: a tensor-product basis keeps every kernel in
+the solver a batched ``einsum`` over regular arrays, which is what a GPU wants,
+and high-order hexahedra are the standard remedy for the volumetric locking
+that plagues nearly incompressible cardiac tissue.
+
+:class:`TetMesh` is unstructured tetrahedra of order 1 or 2, which is the shape
+stored meshes come in.  :meth:`TetMesh.promote` raises a stored linear mesh to
+quadratic displacement by adding edge midpoints, leaving its geometry exactly
+where it was.
 
 Node ordering
 -------------
-All entities use a *lexicographic* tensor-product ordering, which makes the
-shape functions separable::
+Hexahedral entities use a *lexicographic* tensor-product ordering, which makes
+the shape functions separable::
 
     hex  local node (l, m, n)  ->  (l * (p + 1) + m) * (p + 1) + n
     quad local node (a, b)     ->  a * (p + 1) + b
 
-with reference coordinates :math:`\\xi_l = -1 + 2l/p` on :math:`[-1, 1]`.  The
-solver relies on this convention; see :func:`lagrange_basis_1d` in
-``torchcor.mechanics.solver``.
+with reference coordinates :math:`\\xi_l = -1 + 2l/p` on :math:`[-1, 1]`.
+Tetrahedral entities are numbered vertices first, then edge midpoints in
+:attr:`LagrangeTet.EDGES` order, which is *lexicographic* in the edge's two
+vertices.  This is **not** Gmsh's tetra10 order, which runs
+``(0,1) (1,2) (0,2) (0,3) (2,3) (1,3)``: a reader of such a file must permute
+its midside nodes by ``[0, 1, 2, 3, 4, 6, 7, 5, 9, 8]``.  Importing the linear
+cells and calling :meth:`TetMesh.promote` avoids the question entirely, which
+is what the benchmarks do.  The solver relies on both conventions; see
+:mod:`torchcor.mechanics.elements`.
 
 Real meshes
 -----------
-:class:`HexMesh` takes nodes and connectivity directly, so a reader for a
+Both classes take nodes and connectivity directly, so a reader for a
 stored mesh only has to produce those two arrays plus the element order.  The
 one extra thing the rest of the package needs is *named surfaces*: register
-them with :meth:`HexMesh.add_face_set` (for surface loads) and
-:meth:`HexMesh.add_node_set` (for constraints), the way
+them with :meth:`Mesh.add_face_set` (for surface loads) and
+:meth:`Mesh.add_node_set` (for constraints), the way
 :class:`StructuredBoxMesh` registers its six sides, and everything downstream
 refers to them by name without knowing where the mesh came from.
 
@@ -50,13 +64,19 @@ from typing import Callable, Dict, Iterable, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
+from torchcor.mechanics.elements import (
+    LagrangeHex, LagrangeQuad, LagrangeTet, LagrangeTri)
+
 __all__ = [
     "as_device",
     "FaceSet",
+    "Mesh",
     "HexMesh",
+    "TetMesh",
     "StructuredBoxMesh",
     "TruncatedEllipsoidMesh",
     "hex_face_local_nodes",
+    "tet_face_local_nodes",
     "HEX_FACE_NAMES",
 ]
 
@@ -158,18 +178,27 @@ class FaceSet:
         return FaceSet(self.name, self.connectivity.to(device), self.order)
 
 
-class HexMesh:
-    """A tensor-product hexahedral mesh living on a torch device.
+class Mesh:
+    """Nodes, cells and named sets, on a torch device.
+
+    A subclass picks the element family by setting :attr:`cell_element` and
+    :attr:`face_element`; everything here -- sizes, sets, selectors,
+    interpolation and Newton point refinement -- is written against that pair
+    and so is shared by every family.
 
     Parameters
     ----------
     points:
         ``(n_points, 3)`` nodal coordinates.
     cells:
-        ``(n_cells, (p + 1) ** 3)`` connectivity in lexicographic order.
+        ``(n_cells, n_en)`` connectivity, in the family's node order.
     order:
         Polynomial order ``p`` of the element.
     """
+
+    cell_element: type                  # reference element of a cell
+    face_element: type                  # reference element of a face
+    vtk_cell_type: int                  # VTK id used by linear_cells()
 
     def __init__(
         self,
@@ -192,11 +221,11 @@ class HexMesh:
         self.points = torch.as_tensor(points, dtype=dtype, device=device).contiguous()
         self.cells = torch.as_tensor(cells, dtype=torch.long, device=device).contiguous()
 
-        expected = (self.order + 1) ** 3
+        expected = self.cell_element.n_nodes(self.order)
         if self.cells.shape[1] != expected:
             raise ValueError(
-                f"order-{self.order} hexahedra need {expected} nodes per cell, "
-                f"got {self.cells.shape[1]}"
+                f"order-{self.order} {self.cell_element.__name__} cells need "
+                f"{expected} nodes per cell, got {self.cells.shape[1]}"
             )
 
         self.node_sets: Dict[str, torch.Tensor] = {}
@@ -227,7 +256,7 @@ class HexMesh:
         )
 
     # ----------------------------------------------------------------- device
-    def to(self, device: torch.device) -> "HexMesh":
+    def to(self, device: torch.device) -> "Mesh":
         """Move the mesh (and all its sets) to ``device``, in place."""
         device = torch.device(device)
         self.device = device
@@ -253,14 +282,6 @@ class HexMesh:
     def face_set(self, name: str) -> FaceSet:
         return self.face_sets[name]
 
-    def faces_of_cells(self, name: str, cell_ids: torch.Tensor, face: str) -> FaceSet:
-        """Build a :class:`FaceSet` from ``face`` of the given cells."""
-        local = torch.as_tensor(
-            hex_face_local_nodes(self.order, face), dtype=torch.long, device=self.device
-        )
-        cell_ids = torch.as_tensor(cell_ids, dtype=torch.long, device=self.device)
-        return FaceSet(name, self.cells[cell_ids][:, local].contiguous(), self.order)
-
     # -------------------------------------------------------------- selectors
     def nodes_where(self, predicate: Callable[[torch.Tensor], torch.Tensor]) -> torch.Tensor:
         """Node indices whose coordinates satisfy ``predicate(points) -> bool mask``."""
@@ -279,18 +300,13 @@ class HexMesh:
         """Evaluate a nodal field at reference coordinates inside given cells.
 
         ``cells`` is ``(n,)`` cell indices and ``xi`` ``(n, 3)`` coordinates in
-        ``[-1, 1]^3``.  Locating the points is the caller's job; this is the
-        part that does not depend on how the mesh was built.
+        the reference cell.  Locating the points is the caller's job; this is
+        the part that does not depend on how the mesh was built.
         """
-        from torchcor.mechanics.elements import lagrange_basis_1d  # local: avoid cycle
-
         field = torch.as_tensor(nodal_field, dtype=self.dtype, device=self.device)
         if xi.shape[0] == 0:
             return field.new_empty((0,) + field.shape[1:])
-        # Separable basis: N_{lmn}(xi) = L_l(xi_0) L_m(xi_1) L_n(xi_2).
-        L = [lagrange_basis_1d(self.order, xi[:, d])[0] for d in range(3)]
-        N = (L[0][:, :, None, None] * L[1][:, None, :, None]
-             * L[2][:, None, None, :]).reshape(xi.shape[0], -1)
+        N, _ = self.cell_element.basis(self.order, xi)
 
         values = field[self.cells[cells]]                    # (n, n_en, ...)
         extra = values.dim() - 2
@@ -352,8 +368,6 @@ class HexMesh:
         Returns the corrected coordinates and the remaining residual distance.
         A nonzero residual may require another cell or an outside-point policy.
         """
-        from torchcor.mechanics.elements import lagrange_basis_1d  # local: avoid cycle
-
         if not isinstance(iterations, int) or iterations < 1:
             raise ValueError("iterations must be a positive integer")
         target = torch.as_tensor(points, dtype=self.dtype,
@@ -365,17 +379,7 @@ class HexMesh:
         eye = torch.eye(3, dtype=self.dtype, device=self.device)
         regularisation = max(1e-12, 10*torch.finfo(self.dtype).eps)
         for _ in range(iterations):
-            bases = [lagrange_basis_1d(self.order, xi[:, d]) for d in range(3)]
-            N = (bases[0][0][:, :, None, None]*bases[1][0][:, None, :, None]
-                 * bases[2][0][:, None, None, :]).reshape(xi.shape[0], -1)
-            dN = torch.stack([
-                (bases[0][1][:, :, None, None]*bases[1][0][:, None, :, None]
-                 * bases[2][0][:, None, None, :]).reshape(xi.shape[0], -1),
-                (bases[0][0][:, :, None, None]*bases[1][1][:, None, :, None]
-                 * bases[2][0][:, None, None, :]).reshape(xi.shape[0], -1),
-                (bases[0][0][:, :, None, None]*bases[1][0][:, None, :, None]
-                 * bases[2][1][:, None, None, :]).reshape(xi.shape[0], -1),
-            ], dim=-1)                                          # (n, n_en, 3)
+            N, dN = self.cell_element.basis(self.order, xi)      # (n, n_en, 3)
 
             residual = torch.einsum("na,nai->ni", N, nodes) - target
             if float(residual.norm(dim=1).max()) <= tolerance:
@@ -389,11 +393,9 @@ class HexMesh:
                 normal, jacobian.mT @ residual.unsqueeze(-1), check_errors=False)
             step = step.squeeze(-1)
             usable = (info == 0) & torch.isfinite(step).all(dim=-1)
-            xi = torch.where(usable[:, None], (xi - step).clamp(-1.0, 1.0), xi)
+            xi = torch.where(usable[:, None], self.clamp_reference(xi - step), xi)
 
-        bases = [lagrange_basis_1d(self.order, xi[:, d])[0] for d in range(3)]
-        N = (bases[0][:, :, None, None]*bases[1][:, None, :, None]
-             * bases[2][:, None, None, :]).reshape(xi.shape[0], -1)
+        N, _ = self.cell_element.basis(self.order, xi)
         distance = (torch.einsum("na,nai->ni", N, nodes) - target).norm(dim=1)
         return xi, distance
 
@@ -405,6 +407,45 @@ class HexMesh:
         the residual tolerance or choose what happens outside the mesh.
         """
         return self.interpolate_local(nodal_field, *self.locate(points, **locate))
+
+    def write_vtu(
+        self,
+        path: str | Path,
+        point_data: Optional[Dict[str, torch.Tensor]] = None,
+        displacement: Optional[torch.Tensor] = None,
+    ) -> Path:
+        """Write this mesh to a ``.vtu`` file, subdividing high-order cells.
+
+        With ``displacement`` the mesh is written in its deformed configuration.
+        Thin wrapper over :mod:`torchcor.mechanics.visualisation`, which holds
+        all VTK output for the mechanics module.
+        """
+        from torchcor.mechanics import visualisation  # local: avoid cycle
+
+        if displacement is None:
+            return visualisation.write_mesh(path, self, point_data=point_data)
+        return visualisation.write_deformed(path, self, displacement,
+                                            point_data=point_data)
+
+
+class HexMesh(Mesh):
+    """A tensor-product hexahedral mesh.
+
+    ``cells`` is ``(n_cells, (p + 1) ** 3)``, lexicographic; see the module
+    docstring for the node ordering and face orientation conventions.
+    """
+
+    cell_element = LagrangeHex
+    face_element = LagrangeQuad
+    vtk_cell_type = 12                                   # VTK_HEXAHEDRON
+
+    def faces_of_cells(self, name: str, cell_ids: torch.Tensor, face: str) -> FaceSet:
+        """Build a :class:`FaceSet` from ``face`` of the given cells."""
+        local = torch.as_tensor(
+            hex_face_local_nodes(self.order, face), dtype=torch.long, device=self.device
+        )
+        cell_ids = torch.as_tensor(cell_ids, dtype=torch.long, device=self.device)
+        return FaceSet(name, self.cells[cell_ids][:, local].contiguous(), self.order)
 
     # ------------------------------------------------------------------- i/o
     def linear_cells(self) -> np.ndarray:
@@ -433,24 +474,225 @@ class HexMesh:
         cells = self.cells.detach().cpu().numpy()
         return cells[:, local].reshape(-1, 8)
 
-    def write_vtu(
-        self,
-        path: str | Path,
-        point_data: Optional[Dict[str, torch.Tensor]] = None,
-        displacement: Optional[torch.Tensor] = None,
-    ) -> Path:
-        """Write this mesh to a ``.vtu`` file, subdividing high-order cells.
+    @staticmethod
+    def clamp_reference(xi: torch.Tensor) -> torch.Tensor:
+        """Project reference coordinates back into ``[-1, 1]^3``."""
+        return xi.clamp(-1.0, 1.0)
 
-        With ``displacement`` the mesh is written in its deformed configuration.
-        Thin wrapper over :mod:`torchcor.mechanics.visualisation`, which holds
-        all VTK output for the mechanics module.
+    def _locate_neighbors(self, points, cells, xi, distance, tolerance):
+        """Retry only unresolved points in batched adjacent-cell candidates.
+
+        An analytic inverse names one cell, and on a faceted mesh that cell can
+        be the wrong one -- the point then sits just outside it and no amount of
+        Newton correction reaches it.  The remedy is to look at the neighbours,
+        not to widen the tolerance until the miss is hidden.  Needs the
+        structured ``divisions`` and their ``(i*nu + j)*nv + k`` numbering, with
+        the last axis periodic.
         """
-        from torchcor.mechanics import visualisation  # local: avoid cycle
+        nt, nu, nv = self.divisions
+        offsets = torch.cartesian_prod(*[
+            torch.arange(-1, 2, device=self.device) for _ in range(3)])
+        pending = distance > tolerance
+        for _ in range(nt + nu + nv):
+            rows = pending.nonzero(as_tuple=True)[0]
+            if rows.numel() == 0:
+                break
+            ids = cells[rows]
+            index = torch.stack([ids//(nu*nv), (ids//nv) % nu, ids % nv], dim=-1)
+            candidates = index[:, None, :] + offsets[None, :, :]
+            valid = ((candidates[..., 0] >= 0) & (candidates[..., 0] < nt)
+                     & (candidates[..., 1] >= 0) & (candidates[..., 1] < nu))
+            candidates[..., 0].clamp_(0, nt - 1)
+            candidates[..., 1].clamp_(0, nu - 1)
+            candidates[..., 2].remainder_(nv)
+            candidate_cells = ((candidates[..., 0]*nu + candidates[..., 1])*nv
+                               + candidates[..., 2])
+            guesses = (xi[rows, None, :] - 2*offsets).clamp(-1., 1.)
+            refined, residual = self.refine_local(
+                points[rows, None, :].expand(-1, 27, -1).reshape(-1, 3),
+                candidate_cells.reshape(-1), guesses.reshape(-1, 3),
+                tolerance=tolerance)
+            residual = residual.reshape(-1, 27).masked_fill(~valid, float("inf"))
+            best_distance, best = residual.min(dim=1)
+            improved = best_distance < distance[rows]
+            selected = torch.arange(rows.numel(), device=self.device)
+            best_xi = refined.reshape(-1, 27, 3)[selected, best]
+            best_cells = candidate_cells[selected, best]
+            update = rows[improved]
+            cells[update] = best_cells[improved]
+            xi[update] = best_xi[improved]
+            distance[update] = best_distance[improved]
+            pending[rows] = improved & (best_distance > tolerance)
+        return cells, xi, distance
 
-        if displacement is None:
-            return visualisation.write_mesh(path, self, point_data=point_data)
-        return visualisation.write_deformed(path, self, displacement,
-                                            point_data=point_data)
+
+def tet_face_local_nodes(order: int, face: int) -> np.ndarray:
+    """Local nodes of tetrahedron face ``face``, the one opposite vertex ``face``.
+
+    Ordered so that ``(b - a) x (c - a)`` points out of a positively oriented
+    cell, which is what :class:`FaceSet` promises, and continuing with the
+    midside nodes in :attr:`LagrangeTri.EDGES` order for ``order == 2``.
+    """
+    vertices = ((1, 2, 3), (0, 3, 2), (0, 1, 3), (0, 2, 1))[int(face)]
+    if int(order) == 1:
+        return np.array(vertices, dtype=np.int64)
+    mid = {frozenset(e): 4 + k for k, e in enumerate(LagrangeTet.EDGES)}
+    return np.array(list(vertices) + [mid[frozenset((vertices[a], vertices[b]))]
+                                      for a, b in LagrangeTri.EDGES], dtype=np.int64)
+
+
+class TetMesh(Mesh):
+    """An unstructured tetrahedral mesh, order 1 or 2.
+
+    This is the shape stored meshes come in.  ``cells`` is
+    ``(n_cells, 4)`` or ``(n_cells, 10)``: the four vertices, then the midside
+    nodes in :attr:`LagrangeTet.EDGES` order, so a reader only has to hand over
+    points, cells and its boundary triangles.  That order is lexicographic in
+    each edge's vertices and differs from Gmsh's tetra10 -- see the module
+    docstring for the permutation, or import the linear cells and call
+    :meth:`promote`.
+    """
+
+    cell_element = LagrangeTet
+    face_element = LagrangeTri
+    vtk_cell_type = 10                                   # VTK_TETRA
+    #: Largest intermediate :meth:`locate` will build, in tensor elements.
+    BLOCK_ELEMENTS = 2**26
+
+    def faces_of_cells(self, name: str, cell_ids: torch.Tensor, face: int) -> FaceSet:
+        """Build a :class:`FaceSet` from the face opposite vertex ``face``."""
+        local = torch.as_tensor(tet_face_local_nodes(self.order, face),
+                                dtype=torch.long, device=self.device)
+        cell_ids = torch.as_tensor(cell_ids, dtype=torch.long, device=self.device)
+        return FaceSet(name, self.cells[cell_ids][:, local].contiguous(), self.order)
+
+    def promote(self) -> "TetMesh":
+        """Return the order-2 mesh obtained by adding a node on every edge.
+
+        Stored meshes are linear, while the quadratic *displacement* the
+        reference implementations use needs midside nodes.  Placing them at the
+        edge midpoints leaves the geometry exactly as it was -- the isoparametric
+        map of such a cell is still affine -- so this raises the interpolation
+        order without moving the boundary.  Node sets carry over unchanged and
+        face sets gain their own midside nodes -- and so does any node set
+        that names a surface, since a set used to constrain a surface must
+        cover it.  A node set with no matching face set is a list of
+        individually chosen vertices and is carried over as it is.
+        """
+        if self.order != 1:
+            raise ValueError("only a linear tetrahedral mesh can be promoted")
+        n = self.n_points
+        edges = torch.as_tensor(LagrangeTet.EDGES, dtype=torch.long, device=self.device)
+        pairs = self.cells[:, edges]                              # (nc, 6, 2)
+        # One integer per edge, so the unique edges come back sorted and an
+        # arbitrary edge can be looked up later with a binary search.
+        code, inverse = torch.unique(
+            self._edge_code(pairs[..., 0], pairs[..., 1], n).reshape(-1),
+            return_inverse=True)
+        ends = torch.stack([code // n, code % n], dim=1)
+        mesh = type(self)(
+            torch.cat([self.points, self.points[ends].mean(dim=1)]),
+            torch.cat([self.cells, n + inverse.reshape(-1, len(LagrangeTet.EDGES))], dim=1),
+            2, self.device, self.dtype)
+
+        mesh.node_sets = dict(self.node_sets)
+        for name, faces in self.face_sets.items():
+            tri = faces.connectivity
+            mid = [n + torch.searchsorted(code, self._edge_code(tri[:, a], tri[:, b], n))
+                   for a, b in LagrangeTri.EDGES]
+            promoted = FaceSet(name, torch.cat([tri, torch.stack(mid, dim=1)],
+                                               dim=1).contiguous(), 2)
+            mesh.add_face_set(promoted)
+            if name in mesh.node_sets:
+                mesh.add_node_set(name, promoted.nodes())
+        return mesh
+
+    @staticmethod
+    def _edge_code(a: torch.Tensor, b: torch.Tensor, n: int) -> torch.Tensor:
+        """One increasing integer per undirected edge of an ``n``-node mesh."""
+        return torch.minimum(a, b)*n + torch.maximum(a, b)
+
+    @staticmethod
+    def clamp_reference(xi: torch.Tensor) -> torch.Tensor:
+        """Project reference coordinates back into the unit tetrahedron."""
+        xi = xi.clamp_min(0.0)
+        total = xi.sum(dim=-1, keepdim=True)
+        return torch.where(total > 1.0, xi/total, xi)
+
+    def locate(self, points: torch.Tensor, tolerance: float = 1e-8,
+               outside: str = "raise") -> Tuple[torch.Tensor, torch.Tensor]:
+        """Find the cell and reference coordinates of physical ``points``.
+
+        The four vertices of a cell define an affine map, so its barycentric
+        coordinates come from one 3x3 solve; the cell whose smallest coordinate
+        is largest is the one containing the point, or the nearest one if it
+        lies outside.  :meth:`refine_local` then corrects for curvature, which
+        costs one iteration when the cell really is affine.
+        """
+        pts = self._probe_points(points, tolerance, outside)
+        corner = self.points[self.cells[:, :4]]                   # (nc, 4, 3)
+        # One affine map per cell, inverted once, so testing a point against
+        # every cell is a single matrix product per block.
+        inverse = torch.linalg.inv((corner[:, 1:] - corner[:, :1]).mT)
+
+        cells = pts.new_empty(pts.shape[0], dtype=torch.long)
+        xi = pts.new_empty((pts.shape[0], 3))
+        # Every cell is tested against every point, so the points are blocked
+        # to bound that intermediate -- by its size, not by a point count, so
+        # a large mesh gets a smaller block instead of a slower loop.
+        block = max(1, self.BLOCK_ELEMENTS // max(1, 3*self.n_cells))
+        index = torch.arange(min(block, pts.shape[0]), device=self.device)
+        for lo in range(0, pts.shape[0], block):
+            here = pts[lo:lo + block]
+            lam = inverse @ (here[None] - corner[:, :1]).mT        # (nc, 3, nb)
+            best = torch.minimum(lam.amin(dim=1), 1.0 - lam.sum(dim=1)).argmax(dim=0)
+            cells[lo:lo + block] = best
+            xi[lo:lo + block] = lam[best, :, index[:here.shape[0]]]
+
+        xi, distance = self.refine_local(pts, cells, self.clamp_reference(xi))
+        self._check_location(distance, tolerance, outside)
+        return cells, xi
+
+    #: The eight cells a quadratic tetrahedron splits into: one at each
+    #: corner, then the remaining octahedron cut along the diagonal joining
+    #: the midpoints of the opposite edges (0,1) and (2,3).
+    SUBDIVISION = ((0, 4, 5, 6), (4, 1, 7, 8), (5, 7, 2, 9), (6, 8, 9, 3),
+                   (4, 5, 6, 9), (4, 5, 9, 7), (4, 9, 6, 8), (4, 7, 9, 8))
+    #: ... and the four a quadratic triangle splits into.
+    FACE_SUBDIVISION = ((0, 3, 4), (3, 1, 5), (4, 5, 2), (3, 5, 4))
+
+    def refine(self) -> "TetMesh":
+        """Split every cell into eight, leaving the boundary where it is.
+
+        Red refinement: every edge gains a midpoint, every cell becomes eight
+        and every boundary facet becomes four *coplanar* facets.  The surface,
+        its area and its normal field are therefore pointwise unchanged, which
+        is what makes this the refinement to use when the boundary geometry is
+        itself part of the problem -- remeshing at a smaller element size moves
+        the boundary and so changes the problem being solved.
+        """
+        quadratic = self.promote()
+        pick = lambda table: torch.as_tensor(table, dtype=torch.long,
+                                             device=self.device)
+        mesh = type(self)(quadratic.points,
+                          quadratic.cells[:, pick(self.SUBDIVISION)].reshape(-1, 4),
+                          1, self.device, self.dtype)
+        mesh.node_sets = dict(quadratic.node_sets)
+        for name, faces in quadratic.face_sets.items():
+            mesh.add_face_set(FaceSet(
+                name, faces.connectivity[:, pick(self.FACE_SUBDIVISION)]
+                .reshape(-1, 3).contiguous(), 1))
+        return mesh
+
+    def linear_cells(self) -> np.ndarray:
+        """Split every order-``p`` tetrahedron into ``p ** 3`` 4-node cells.
+
+        Used for VTK output; :attr:`SUBDIVISION` is the same split.
+        """
+        cells = self.cells.detach().cpu().numpy()
+        if self.order == 1:
+            return cells
+        return cells[:, np.array(self.SUBDIVISION, dtype=np.int64)].reshape(-1, 4)
 
 
 class StructuredBoxMesh(HexMesh):
@@ -571,7 +813,7 @@ class StructuredBoxMesh(HexMesh):
 
 
 class TruncatedEllipsoidMesh(HexMesh):
-    """A truncated-ellipsoid ventricle, as used by benchmark problems 2 and 3.
+    r"""A truncated-ellipsoid ventricle, as used by benchmark problems 2 and 3.
 
     The wall is parametrised by ``(t, s, v)``:
 
@@ -780,44 +1022,6 @@ class TruncatedEllipsoidMesh(HexMesh):
                 points, cells, xi, distance, tolerance)
         self._check_location(distance, tolerance, outside)
         return cells, xi
-
-    def _locate_neighbors(self, points, cells, xi, distance, tolerance):
-        """Retry only unresolved points in batched adjacent-cell candidates."""
-        nt, nu, nv = self.divisions
-        offsets = torch.cartesian_prod(*[
-            torch.arange(-1, 2, device=self.device) for _ in range(3)])
-        pending = distance > tolerance
-        for _ in range(nt + nu + nv):
-            rows = pending.nonzero(as_tuple=True)[0]
-            if rows.numel() == 0:
-                break
-            ids = cells[rows]
-            index = torch.stack([ids//(nu*nv), (ids//nv) % nu, ids % nv], dim=-1)
-            candidates = index[:, None, :] + offsets[None, :, :]
-            valid = ((candidates[..., 0] >= 0) & (candidates[..., 0] < nt)
-                     & (candidates[..., 1] >= 0) & (candidates[..., 1] < nu))
-            candidates[..., 0].clamp_(0, nt - 1)
-            candidates[..., 1].clamp_(0, nu - 1)
-            candidates[..., 2].remainder_(nv)
-            candidate_cells = ((candidates[..., 0]*nu + candidates[..., 1])*nv
-                               + candidates[..., 2])
-            guesses = (xi[rows, None, :] - 2*offsets).clamp(-1., 1.)
-            refined, residual = self.refine_local(
-                points[rows, None, :].expand(-1, 27, -1).reshape(-1, 3),
-                candidate_cells.reshape(-1), guesses.reshape(-1, 3),
-                tolerance=tolerance)
-            residual = residual.reshape(-1, 27).masked_fill(~valid, float("inf"))
-            best_distance, best = residual.min(dim=1)
-            improved = best_distance < distance[rows]
-            selected = torch.arange(rows.numel(), device=self.device)
-            best_xi = refined.reshape(-1, 27, 3)[selected, best]
-            best_cells = candidate_cells[selected, best]
-            update = rows[improved]
-            cells[update] = best_cells[improved]
-            xi[update] = best_xi[improved]
-            distance[update] = best_distance[improved]
-            pending[rows] = improved & (best_distance > tolerance)
-        return cells, xi, distance
 
 
 def _self_test() -> None:  # pragma: no cover - developer sanity check

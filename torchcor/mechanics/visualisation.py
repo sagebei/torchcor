@@ -18,7 +18,7 @@ Reproducing figure 1 of Land et al. (2015) -- the reference beam below its
 deformed solution, with the probe node, the mid-line and the strain points
 marked -- is a single :func:`write_scene` call.  The benchmarks themselves
 report with :func:`render_deformation`; see
-``torchcor.mechanics.benchmark.p1.write_figure``.
+``torchcor.mechanics.benchmark.land.p1.write_figure``.
 
 High-order cells are written as ``p ** 3`` linear sub-hexahedra rather than as
 VTK Lagrange cells: every ParaView version renders them, and the subdivision
@@ -171,7 +171,8 @@ def write_mesh(
     """
     if not hasattr(mesh, "linear_cells"):
         raise TypeError(f"{type(mesh).__name__} has no linear_cells(); expected a HexMesh")
-    return write_vtu(path, mesh.points, mesh.linear_cells(), VTK_HEXAHEDRON,
+    return write_vtu(path, mesh.points, mesh.linear_cells(),
+                     getattr(mesh, "vtk_cell_type", VTK_HEXAHEDRON),
                      point_data=point_data, cell_data=cell_data)
 
 
@@ -197,7 +198,8 @@ def write_deformed(
     }
     fields.update(point_data or {})
 
-    return write_vtu(path, pts, mesh.linear_cells(), VTK_HEXAHEDRON,
+    return write_vtu(path, pts, mesh.linear_cells(),
+                     getattr(mesh, "vtk_cell_type", VTK_HEXAHEDRON),
                      point_data=fields, cell_data=cell_data)
 
 

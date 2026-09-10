@@ -37,7 +37,7 @@ from torchcor.mechanics.boundary import DirichletBC, FollowerPressure
 from torchcor.mechanics.material import GuccioneMaterial, IsochoricMaterial
 from torchcor.mechanics.mesh import TruncatedEllipsoidMesh
 from torchcor.mechanics.benchmark import report as reporting
-from torchcor.mechanics.benchmark.ventricle import (
+from torchcor.mechanics.benchmark.land.ventricle import (
     BASE_Z, CIRC_ANGLE, ENDO, EPI, LAYERS, STATIONS, VentricleSolution,
 )
 
@@ -247,7 +247,8 @@ def write_figure(solution: VentricleSolution, path: str = "ventricle.png") -> Pa
 #  Running it
 # =============================================================================
 def main(argv: list[str] | None = None) -> int:
-    args = reporting.arguments(__doc__.splitlines()[0], argv)
+    args = reporting.arguments(__doc__.splitlines()[0], argv,
+                               default_out=Path(__file__).with_name("p2"))
     meshes = [tuple(args.mesh)] if args.mesh else MESHES
     solutions = [solve_ventricle(m, device=args.device) for m in meshes]
     passed = report_benchmark(solutions)

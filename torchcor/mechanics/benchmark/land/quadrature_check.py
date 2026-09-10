@@ -10,7 +10,7 @@ from torchcor.mechanics import Mechanics
 from torchcor.mechanics.boundary import DirichletBC, FollowerPressure
 from torchcor.mechanics.material import GuccioneMaterial, IsochoricMaterial, MaterialAxes
 from torchcor.mechanics.mesh import StructuredBoxMesh, TruncatedEllipsoidMesh
-from torchcor.mechanics.benchmark import p1, p2
+from torchcor.mechanics.benchmark.land import p1, p2
 
 
 def solve(problem, n_gauss, device):
@@ -31,7 +31,7 @@ def solve(problem, n_gauss, device):
         axes=axes, bulk_modulus=100. if beam else 1000., quadrature_order=n_gauss,
         boundary=[DirichletBC.on_surface(mesh, fixed),
                   FollowerPressure.on_surface(mesh, loaded, reference.PRESSURE)])
-    sim.solve(line_search="none" if beam else "backtracking")
+    sim.solve(line_search="none" if beam else "critical-point")
     return sim, dict(problem=problem, n_gauss=n_gauss, dofs=mesh.n_dofs,
                      positions=sim.probe(probes)[:, 2].tolist(),
                      volume=sim.volume_report(n_gauss=8), solver=asdict(sim.report))

@@ -6,7 +6,7 @@ Read a script top to bottom and it goes geometry, material, boundary, solve::
     from torchcor.mechanics import Mechanics
     from torchcor.mechanics.mesh import StructuredBoxMesh
     from torchcor.mechanics.material import GuccioneMaterial, IsochoricMaterial, MaterialAxes
-    from torchcor.mechanics.boundary import DirichletBC, FollowerPressure
+    from torchcor.mechanics.boundary import DirichletBC, RobinBC, FollowerPressure
 
     # geometry, and the device everything else follows
     mesh = StructuredBoxMesh((0, 0, 0), (10, 1, 1), (40, 4, 4), order=2,
@@ -42,17 +42,19 @@ from typing import List, Optional, Sequence, Union
 import torch
 
 from torchcor.mechanics.assembly import FiniteStrainProblem
-from torchcor.mechanics.boundary import DirichletBC
+from torchcor.mechanics.boundary import DirichletBC, RobinBC
 from torchcor.mechanics.material import HyperelasticMaterial, MaterialAxes
-from torchcor.mechanics.mesh import HexMesh
-from torchcor.mechanics.solver import QuasiStaticSolver, SolveReport
+from torchcor.mechanics.mesh import Mesh
+from torchcor.mechanics.solver import (
+    DynamicSolver, QuasiStaticSolver, SolveReport,
+)
 from torchcor.mechanics.visualisation import render_deformation, write_mesh
 
 __all__ = ["Mechanics"]
 
 
 class Mechanics:
-    """A quasi-static finite-strain simulation, assembled from its parts.
+    """A finite-strain simulation, assembled from its parts.
 
     Parameters
     ----------
@@ -67,13 +69,21 @@ class Mechanics:
         Local fibre frame; ``None`` means the material's own axes are the
         global ones.
     boundary:
-        Prescribed displacements (:class:`DirichletBC`) and surface loads
-        (:class:`FollowerPressure`), in any order.  Anything that can compute
-        its own ``contribution`` counts as a load, so a new kind of load needs
-        no change here.
+        Prescribed displacements (:class:`DirichletBC`), surface loads
+        (:class:`FollowerPressure`) and elastic/viscous support
+        (:class:`RobinBC`), in any order.  Anything that can compute its own
+        ``contribution`` counts as a load, so a new kind of load needs no
+        change here.
     bulk_modulus:
         Augmented Lagrangian penalty enforcing incompressibility.  It affects
-        conditioning, not the converged answer.
+        conditioning, not the converged answer.  ``None`` leaves volume to the
+        material, for a law that carries its own volumetric term.
+    density:
+        Mass per unit reference volume.  Required by :meth:`solve_dynamic`
+        and ignored by the quasi-static :meth:`solve`.
+    viscosity:
+        Kelvin-Voigt coefficient of a viscous stress ``eta * dE/dt``, which
+        damps the motion.  Only acts in a dynamic solve.
     quadrature_order:
         Gauss points per axis. The default follows the element's polynomial
         degree; increase this for an integration-convergence check.
@@ -83,29 +93,38 @@ class Mechanics:
 
     def __init__(
         self,
-        mesh: HexMesh,
+        mesh: Mesh,
         material: HyperelasticMaterial,
         axes: Optional[MaterialAxes] = None,
         boundary: Sequence[object] = (),
-        bulk_modulus: float = 1.0e2,
+        bulk_modulus: Optional[float] = 1.0e2,
         *,
+        density: float = 0.0,
+        viscosity: float = 0.0,
         quadrature_order: Optional[int] = None,
+        surface_quadrature_order: Optional[int] = None,
         chunk_size: int = 2048,
     ) -> None:
         self.mesh = mesh
         self.material = material
         self.axes = axes
-        self.bulk_modulus = float(bulk_modulus)
+        self.bulk_modulus = None if bulk_modulus is None else float(bulk_modulus)
+        self.density = float(density)
+        self.viscosity = float(viscosity)
         self.quadrature_order = quadrature_order
+        self.surface_quadrature_order = surface_quadrature_order
         self.chunk_size = chunk_size
         self.dtype = mesh.dtype
         self.device = mesh.device
 
         self.dirichlet: List[DirichletBC] = []
+        self.support: List[RobinBC] = []
         self.loads: List[object] = []
         for bc in boundary:
             if isinstance(bc, DirichletBC):
                 self.dirichlet.append(bc)
+            elif isinstance(bc, RobinBC):
+                self.support.append(bc)
             elif hasattr(bc, "contribution"):
                 self.loads.append(bc)
             else:
@@ -124,6 +143,35 @@ class Mechanics:
                 f"dtype={self.dtype})")
 
     # ----------------------------------------------------------------- solve
+    def _build(self, restrained: bool = True) -> FiniteStrainProblem:
+        """The assembled problem.
+
+        ``restrained`` asks for the static well-posedness check: with nothing
+        holding it a static body has a rigid-body nullspace and no unique
+        equilibrium.  A *dynamic* body needs no holding -- mass and initial
+        conditions define the motion -- so the check does not apply there.
+        """
+        if restrained and not self.dirichlet and not self.support:
+            raise RuntimeError("nothing restrains the body: add a DirichletBC "
+                               "or a RobinBC")
+        self.problem = FiniteStrainProblem(
+            mesh=self.mesh, material=self.material, axes=self.axes,
+            bulk_modulus=self.bulk_modulus, density=self.density,
+            viscosity=self.viscosity, dirichlet=self.dirichlet,
+            pressures=self.loads, robin=self.support,
+            quadrature_order=self.quadrature_order,
+            surface_quadrature_order=self.surface_quadrature_order,
+            chunk_size=self.chunk_size,
+        )
+        return self.problem
+
+    def _finish(self, verbose: bool, raise_on_failure: bool) -> torch.Tensor:
+        if verbose:
+            print(f"  {self.report}", flush=True)
+        if raise_on_failure and not self.report.converged:
+            raise RuntimeError(f"mechanics solve failed: {self.report}")
+        return self.u
+
     def solve(self, load_steps: int = 10, verbose: bool = True,
               raise_on_failure: bool = True, **options) -> torch.Tensor:
         """Ramp the loads from zero to full and return the displacement.
@@ -132,24 +180,29 @@ class Mechanics:
         a partial solution and ``sim.report``. Extra keyword arguments go to
         :class:`QuasiStaticSolver`.
         """
-        if not self.dirichlet:
-            raise RuntimeError("no Dirichlet condition: the body would be free "
-                               "to translate")
-
-        self.problem = FiniteStrainProblem(
-            mesh=self.mesh, material=self.material, axes=self.axes,
-            bulk_modulus=self.bulk_modulus,
-            dirichlet=self.dirichlet, pressures=self.loads,
-            quadrature_order=self.quadrature_order, chunk_size=self.chunk_size,
-        )
-        solver = QuasiStaticSolver(self.problem, load_steps=load_steps, verbose=verbose,
-                                   **options)
+        solver = QuasiStaticSolver(self._build(), load_steps=load_steps,
+                                   verbose=verbose, **options)
         self.u, self.report = solver.solve()
-        if verbose:
-            print(f"  {self.report}", flush=True)
-        if raise_on_failure and not self.report.converged:
-            raise RuntimeError(f"mechanics solve failed: {self.report}")
-        return self.u
+        return self._finish(verbose, raise_on_failure)
+
+    def solve_dynamic(self, t_end: float, dt: float, verbose: bool = True,
+                      raise_on_failure: bool = True, observer=None,
+                      u0: Optional[torch.Tensor] = None,
+                      v0: Optional[torch.Tensor] = None,
+                      **options) -> torch.Tensor:
+        """March the loads through time and return the final displacement.
+
+        Loads that vary in time are given as schedules -- a callable pressure
+        or active tension -- which the integrator evaluates at each step.
+        ``observer(t, u, v, a)`` sees every accepted step, which is how a time
+        history is recorded.  Extra keyword arguments go to
+        :class:`DynamicSolver`.
+        """
+        solver = DynamicSolver(self._build(restrained=False), dt=dt,
+                               verbose=verbose, **options)
+        self.u, self.report = solver.solve(t_end, u=u0, velocity=v0,
+                                           observer=observer)
+        return self._finish(verbose, raise_on_failure)
 
     # ------------------------------------------------------- postprocessing
     @property

@@ -1,7 +1,8 @@
 """Boundary conditions for :mod:`torchcor.mechanics`.
 
-Prescribed displacements (:class:`DirichletBC`) and applied loads
-(:class:`FollowerPressure`), plus :class:`DirichletConstraints`, which resolves
+Prescribed displacements (:class:`DirichletBC`), applied loads
+(:class:`FollowerPressure`) and elastic/viscous support (:class:`RobinBC`),
+plus :class:`DirichletConstraints`, which resolves
 a list of possibly overlapping Dirichlet conditions into the single constrained
 degree-of-freedom set the assembler and solver work with.
 """
@@ -11,14 +12,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import operator
-from typing import List, Sequence, Tuple
+from typing import Callable, List, Sequence, Tuple, Union
 
 import torch
 
 from torchcor.mechanics.mesh import FaceSet
 
 
-__all__ = ["DirichletBC", "FollowerPressure", "DirichletConstraints"]
+__all__ = ["DirichletBC", "FollowerPressure", "RobinBC",
+           "DirichletConstraints"]
 
 
 def _index_vector(values, name: str, device: torch.device) -> torch.Tensor:
@@ -142,10 +144,12 @@ class FollowerPressure:
     """
 
     face_set: FaceSet
-    pressure: float
+    pressure: Union[float, Callable[[float], float]]
     name: str = ""
 
     def __post_init__(self) -> None:
+        if callable(self.pressure):        # a schedule, resolved per step
+            return
         if isinstance(self.pressure, torch.Tensor) and self.pressure.ndim != 0:
             raise ValueError("pressure must be a finite scalar")
         try:
@@ -156,15 +160,20 @@ class FollowerPressure:
             raise ValueError("pressure must be a finite scalar")
 
     @classmethod
-    def on_surface(cls, mesh, surface: str, pressure: float) -> "FollowerPressure":
-        """Load a named surface of ``mesh``, e.g. ``"z-"`` or ``"endo"``."""
+    def on_surface(cls, mesh, surface: str, pressure) -> "FollowerPressure":
+        """Load a named surface of ``mesh``, e.g. ``"z-"`` or ``"endo"``.
+
+        ``pressure`` is either a constant, scaled by the quasi-static
+        continuation factor and held fixed in a dynamic solve, or a callable
+        schedule of physical time.
+        """
         if surface not in mesh.face_sets:
             raise KeyError(f"unknown surface {surface!r}; this mesh has "
                            f"{sorted(mesh.face_sets)}")
         return cls(mesh.face_set(surface), pressure, name=surface)
 
     def contribution(self, x: torch.Tensor, quad, load_factor: float = 1.0,
-                     tangent: bool = True):
+                     tangent: bool = True, time: float = 0.0):
         """Nodal force -- and consistent load stiffness -- on deformed coords ``x``.
 
         The deformed area-weighted normal is just ``d_xi1 x  x  d_xi2`` of the
@@ -186,7 +195,11 @@ class FollowerPressure:
         g2 = torch.einsum("fai,qa->fqi", xf, dN2)
         nda = torch.linalg.cross(g1, g2, dim=-1)
 
-        p = load_factor * self.pressure
+        # A constant is scaled by the dimensionless continuation factor; a
+        # schedule is a function of physical time.  Conflating the two makes a
+        # constant pressure ramp with the clock during a dynamic solve.
+        p = (self.pressure(time) if callable(self.pressure)
+             else load_factor * self.pressure)
         force = -p * torch.einsum("q,qa,fqi->fai", w, N, nda)
         if not tangent:
             return force, None
@@ -196,6 +209,77 @@ class FollowerPressure:
         t2 = torch.einsum("imj,qb,fqm->fqijb", eps, dN2, g1)
         K = -p * torch.einsum("q,qa,fqijb->faibj", w, N, t1 + t2)
         return force, K.reshape(n_faces, n_nodes * 3, n_nodes * 3)
+
+
+@dataclass
+class RobinBC:
+    """Elastic and viscous support distributed over a surface.
+
+    The pericardium restrains the epicardium without prescribing where it goes,
+    which is what a Robin condition expresses:
+
+    .. math::  P N + k\,u + c\,\dot{u} = 0
+
+    ``normal_only`` restrains only the surface-normal component, leaving the
+    tangential traction free -- tissue sliding in the pericardial sac:
+
+    .. math::  (P N)\cdot N + k\,(u \cdot N) + c\,(\dot{u} \cdot N) = 0
+
+    Both forms are linear in ``u`` and integrated over the *reference* surface,
+    so each contributes one constant matrix that is assembled once and reused
+    at every step -- unlike :class:`FollowerPressure`, which follows the
+    deformed surface and is rebuilt each time.
+
+    Parameters
+    ----------
+    stiffness, damping:
+        ``k`` and ``c`` above, per unit reference area.
+    normal_only:
+        Restrain the normal component only, rather than all three.
+    """
+
+    face_set: FaceSet
+    stiffness: float = 0.0
+    damping: float = 0.0
+    normal_only: bool = False
+    name: str = ""
+
+    @classmethod
+    def on_surface(cls, mesh, surface: str, stiffness: float = 0.0,
+                   damping: float = 0.0, normal_only: bool = False) -> "RobinBC":
+        """Support a named surface of ``mesh``, e.g. ``"epi"`` or ``"base"``."""
+        if surface not in mesh.face_sets:
+            raise KeyError(f"unknown surface {surface!r}; this mesh has "
+                           f"{sorted(mesh.face_sets)}")
+        return cls(mesh.face_set(surface), float(stiffness), float(damping),
+                   bool(normal_only), name=surface)
+
+    def matrices(self, X: torch.Tensor, quad) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Stiffness and damping face matrices, ``(n_faces, 3n, 3n)`` each.
+
+        ``X`` are the reference coordinates: the surface these act on does not
+        move, so the geometry is evaluated once.
+        """
+        Xf = X[self.face_set.connectivity]
+        w, N = quad.weights, quad.N
+        g1 = torch.einsum("fai,qa->fqi", Xf, quad.dN[..., 0])
+        g2 = torch.einsum("fai,qa->fqi", Xf, quad.dN[..., 1])
+        normal = torch.linalg.cross(g1, g2, dim=-1)
+        area = torch.linalg.vector_norm(normal, dim=-1)
+
+        scale = w[None, :]*area                                   # (f, q)
+        gram = torch.einsum("fq,qa,qb->fab", scale, N, N)         # (f, a, b)
+        if self.normal_only:
+            unit = normal/area[..., None]
+            projector = torch.einsum("fq,qa,qb,fqi,fqj->faibj",
+                                     scale, N, N, unit, unit)
+        else:
+            eye = torch.eye(3, dtype=X.dtype, device=X.device)
+            projector = gram[:, :, None, :, None]*eye[None, None, :, None, :]
+
+        n_faces, n_nodes = self.face_set.connectivity.shape
+        block = projector.reshape(n_faces, n_nodes*3, n_nodes*3)
+        return self.stiffness*block, self.damping*block
 
 
 class DirichletConstraints:
@@ -229,6 +313,7 @@ class DirichletConstraints:
             raise ValueError("Dirichlet conflict tolerance must be finite and nonnegative") from error
         if not math.isfinite(atol) or atol < 0:
             raise ValueError("Dirichlet conflict tolerance must be finite and nonnegative")
+        self.atol = atol
         self.dtype = dtype
         self.device = device
 

@@ -12,7 +12,7 @@ systems. This module contains no geometry or benchmark-specific decisions.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -24,7 +24,7 @@ from torchcor.mechanics.linear import (
 )
 
 
-__all__ = ["SolveReport", "QuasiStaticSolver"]
+__all__ = ["SolveReport", "QuasiStaticSolver", "DynamicSolver"]
 
 
 @dataclass
@@ -37,6 +37,9 @@ class SolveReport:
     newton_iterations: int
     linear_iterations: int
     volume_error: float            #: max projected volume-constraint error
+    #: Smallest J of the *end* state.  A beat that deforms hard and springs
+    #: back ends near one, so this does not describe the loaded state; see
+    #: :attr:`worst_jacobian`.
     min_jacobian: float
     residual: float
     wall_time: float
@@ -45,6 +48,11 @@ class SolveReport:
     volume: Dict[str, float] = field(default_factory=dict)
     #: Peak CUDA memory allocated during the solve, in MiB (0 on CPU).
     peak_memory_mib: float = 0.0
+    #: Smallest J over the whole interval, including the initial state, and
+    #: when it happened.  This is the one to report: the end state is not the
+    #: worst state, and neither is the first step.
+    worst_jacobian: float = float("nan")
+    worst_jacobian_time: float = float("nan")
     #: Why load steps were rejected, and how often.  Reaching full load after
     #: many cutbacks is not the same as never stumbling, and the cause says
     #: which part of the solve to look at.  The categories follow PETSc's
@@ -76,10 +84,13 @@ class QuasiStaticSolver:
     """Load continuation, mixed volume constraints, and Newton's method.
 
     Newton uses the consistent tangent with the line search that structural
-    finite-element codes use: a secant search for the point where the energy
-    slope ``G(alpha) = du . R(u + alpha du)`` vanishes (Crisfield, *Non-linear
-    Finite Element Analysis of Solids and Structures*, vol. 1, section 9.5;
-    the same merit as PETSc's ``SNESLINESEARCHCP``).  The residual *norm* is
+    finite-element codes use.  ``line_search="critical-point"`` -- the default,
+    and the only search implemented -- is a secant search for the point where
+    the energy slope ``G(alpha) = du . R(u + alpha du)`` vanishes (Crisfield,
+    *Non-linear Finite Element Analysis of Solids and Structures*, vol. 1,
+    section 9.5; the same merit as PETSc's ``SNESLINESEARCHCP``, and as Ratel's
+    solver).  It is *not* residual-norm backtracking, and is named for what it
+    does.  The residual *norm* is
     deliberately not the merit function.  On an unloaded body ``|R(0)|`` is
     just the applied load and is tiny, while a correct Newton step raises the
     internal forces, so a sufficient-decrease test on ``|R|`` rejects the very
@@ -93,12 +104,10 @@ class QuasiStaticSolver:
     abandoned when the residual grows past ``divergence_tol`` times the
     smallest it has reached (``SNESSetDivergenceTolerance``), or when it
     exhausts ``max_newton``, which defaults to PETSc's ``SNES`` limit of 50.
-    That budget is generous on purpose: with an adaptive forcing term the
-    early corrections are cheap, and cutting an increment short costs far more
-    than the extra corrections do -- measured on the coarse ventricle, raising
-    it from 15 to 50 removed every cutback and cut the run from 18.0 s to
-    12.1 s.  Nothing here tries to detect "converging too slowly" -- see
-    :meth:`_newton` for why every such test misfires on this problem.
+    That budget is generous on purpose: with an adaptive forcing term the early
+    corrections are cheap, and abandoning an increment costs a whole retry.
+    Nothing here tries to detect "converging too slowly" -- see :meth:`_newton`
+    for why every such test misfires on this problem.
 
     The load increment is chosen from how hard the last one was.  The
     controller is FEBio's automatic time stepper (``FETimeStepController::
@@ -128,8 +137,8 @@ class QuasiStaticSolver:
     modelled corrections be cheap and only the last ones exact.
 
     ``line_search="none"`` selects full Newton corrections. It is not
-    recommended: without a line search an inadmissible trial has nowhere to go
-    but a cutback, so a single overshoot throws away the whole increment.
+    recommended: without a search an inadmissible trial has nowhere to go but a
+    cutback, so a single overshoot throws away the whole increment.
     Useful inexact linear solves must satisfy a true-residual
     forcing bound below one. Load-step failure restores displacement and all
     pressure multipliers before retrying a smaller increment.
@@ -160,7 +169,7 @@ class QuasiStaticSolver:
         newton_atol: float = 1e-10,
         linear_forcing: float = 0.5,
         max_newton: int = 50,
-        line_search: str = "backtracking",
+        line_search: str = "critical-point",
         divergence_tol: float = 1e4,
         optimal_newton: int = 8,
         max_load_step: float = 1.0,
@@ -173,8 +182,11 @@ class QuasiStaticSolver:
         verbose: bool = True,
     ) -> None:
         self.problem = problem
-        # Chosen at the first assembly, once the tangent exists to look at.
+        # Chosen at each Newton solve, once the tangent exists to look at,
+        # unless the caller supplied a method explicitly.
         self.linear_solver = linear_solver
+        self._user_solver = linear_solver is not None
+        self._symmetric = None
         self.newton_rtol = float(newton_rtol)
         self.newton_atol = float(newton_atol)
         self.linear_forcing = float(linear_forcing)
@@ -219,8 +231,8 @@ class QuasiStaticSolver:
         until it underflows, and ``dlam < 0`` never becomes true, so the
         continuation loop retries for ever.
         """
-        if self.line_search not in ("backtracking", "none"):
-            raise ValueError("line_search must be 'backtracking' or 'none'")
+        if self.line_search not in ("critical-point", "none"):
+            raise ValueError("line_search must be 'critical-point' or 'none'")
         positive = dict(min_load_step=self.min_load_step, al_tol=self.al_tol,
                         linear_forcing=self.linear_forcing)
         for name, value in positive.items():
@@ -266,10 +278,20 @@ class QuasiStaticSolver:
         return self.problem.constraints.free_norm(R)
 
     # ----------------------------------------------------------------- newton
+    def _system(self, u, load_factor, tangent):
+        """Residual and tangent of the system Newton solves.
+
+        Quasi-statics solves the problem's own force balance; a time
+        integrator overrides this to add inertia and evaluate at its own
+        intermediate state, and inherits everything else -- line search,
+        forcing term, Krylov choice, cutbacks -- unchanged.
+        """
+        return self.problem.evaluate(u, load_factor, tangent)
+
     def _probe(self, u, load_factor):
         """Evaluate an admissible trial, transferring scalar diagnostics once."""
         try:
-            R, _, raw = self.problem.evaluate(u, load_factor, tangent=False)
+            R, _, raw = self._system(u, load_factor, tangent=False)
         except torch.linalg.LinAlgError:
             return None
         info = raw.resolve()
@@ -343,38 +365,36 @@ class QuasiStaticSolver:
             eta = max(eta, 0.5 * threshold / norm)
         return float(min(max(eta, 1e-12), self.forcing_max))
 
-    def _choose_solver(self, values: torch.Tensor) -> KrylovSolver:
-        """Conjugate gradients if the tangent is symmetric, BiCGStab if not.
+    def _ensure_solver(self, values: torch.Tensor) -> None:
+        """Keep the Krylov method matched to the tangent as the tangent changes.
 
-        The test is exact and costs one comparison: the assembler keeps the
-        permutation that maps its stored entries onto those of the transpose,
-        so symmetry is a property of the values, not something to infer.
-
-        It must be applied to the values the Krylov solver is actually given,
-        i.e. *after* Dirichlet elimination.  The nonsymmetric part of a
-        follower load lives on the edge of the loaded surface, which for an
-        inflated ventricle is the clamped base ring, so eliminating the
-        constraints removes it: the raw tangent looks nonsymmetric by 1.4e-4
-        while the system being solved is symmetric to 1e-15.
+        Symmetry is a property of the current matrix, not of the problem: a
+        follower load that switches on later, or a rate-dependent stiffness,
+        turns a symmetric tangent nonsymmetric part-way through a run.
+        Choosing once and never looking again leaves conjugate gradients
+        running on a matrix that no longer meets their assumptions, which the
+        negative-curvature test does not detect.  The test is one comparison
+        over the stored values, so it is repeated whenever a Newton solve
+        starts.
         """
+        if self._user_solver:
+            return
         perm = self.problem.assembler.transpose_perm
         scale = float(values.abs().max())
         asymmetry = float((values - values[perm]).abs().max())
-        symmetric = scale == 0.0 or asymmetry <= 1e-10 * scale
-        self._log(f"  tangent is {'symmetric' if symmetric else 'nonsymmetric'} "
+        symmetric = scale == 0.0 or asymmetry <= 1e-10*scale
+        if symmetric is self._symmetric and self.linear_solver is not None:
+            return
+        self._symmetric = symmetric
+        self._log(f"    tangent is {'symmetric' if symmetric else 'nonsymmetric'} "
                   f"(relative asymmetry {asymmetry/max(scale, 1e-300):.2e}); using "
                   f"{'CG' if symmetric else 'BiCGStab'}")
-        krylov = ConjugateGradient if symmetric else BiCGStab
-        # PETSc's KSP default cap.  deal.II step-44 caps at a multiple of the
-        # system size instead, but in floating point CG on an ill-conditioned
-        # tangent regularly needs more than n iterations, and on the 567-DOF
-        # beam a cap of n failed solves that 1000 iterations complete.
-        return krylov(BlockJacobiPreconditioner(), rtol=self.forcing_initial,
-                      max_iter=10000)
+        self.linear_solver = (ConjugateGradient if symmetric else BiCGStab)(
+            BlockJacobiPreconditioner(), rtol=self.forcing_initial, max_iter=10000)
 
     def _newton(self, u: torch.Tensor, load_factor: float) -> Tuple[bool, torch.Tensor, dict]:
         problem = self.problem
-        R, values, raw = problem.evaluate(u, load_factor, tangent=True)
+        R, values, raw = self._system(u, load_factor, tangent=True)
         info = raw.resolve()
         # How far from converged, not how far from where we started.
         def distance(state):
@@ -407,8 +427,11 @@ class QuasiStaticSolver:
                 return False, u, info
 
             values = self._tangent(values)
-            if self.linear_solver is None:
-                self.linear_solver = self._choose_solver(values)
+            # Every matrix, not only the first of the solve: the tangent can
+            # lose symmetry between corrections -- a follower load or a
+            # rate-dependent term switching on part-way through -- and a method
+            # chosen for the first matrix is not justified for the rest.
+            self._ensure_solver(values)
             A = problem.assembler.to_csr(values)
             rhs = problem.constraints.zero_constrained(R.clone())
 
@@ -451,26 +474,26 @@ class QuasiStaticSolver:
                 return False, u, info
 
             du = problem.constraints.zero_constrained(res.x)
-            backtracking = self.line_search == "backtracking"
+            searching = self.line_search == "critical-point"
             # G(0) = du . R.  Crisfield's search looks for the root of G and
             # does not need G(0) < 0: on an indefinite tangent the exact
             # Newton direction can have either sign and still be the step
             # that converges.  A vanishing G(0) means the full step already
             # sits at the energy stationary point along du, so there is
             # nothing to search for.
-            slope = float(torch.dot(du, rhs)) if backtracking else 0.0
+            slope = float(torch.dot(du, rhs)) if searching else 0.0
             if not np.isfinite(slope):
                 info["reason"] = "non-finite residual"
                 return False, u, info
 
             alpha, trial = self._line_search(u, du, load_factor, norm, slope,
-                                             backtracking)
+                                             searching)
             if trial is None:
                 info["reason"] = ("line search could not reduce the residual"
-                                  if backtracking else "invalid Newton trial")
+                                  if searching else "invalid Newton trial")
                 return False, u, info
             u = u + alpha*du
-            R, values, raw = problem.evaluate(u, load_factor, tangent=True)
+            R, values, raw = self._system(u, load_factor, tangent=True)
             info = raw.resolve()
             history.append(distance(info))
 
@@ -479,7 +502,7 @@ class QuasiStaticSolver:
             info["reason"] = f"no convergence in {self.max_newton} Newton steps"
         return done, u, info
 
-    def _line_search(self, u, du, load_factor, norm, slope, backtracking):
+    def _line_search(self, u, du, load_factor, norm, slope, searching):
         """Crisfield's line search on the energy slope; returns ``(alpha, trial)``.
 
         ``slope`` is ``G(0) = du . R(u)``, negative for a descent direction.
@@ -491,7 +514,7 @@ class QuasiStaticSolver:
         the internal forces grow faster than the applied load, which is the
         normal situation early in a load step.  See the class docstring.
         """
-        if not backtracking or slope == 0.0:
+        if not searching or slope == 0.0:
             return 1.0, self._probe(u + du, load_factor)
 
         alpha, best = 1.0, None
@@ -538,7 +561,8 @@ class QuasiStaticSolver:
         """
         problem = self.problem
         u_backup = u.clone()
-        p_bar_backup = problem.p_bar.clone()
+        p_bar = problem.p_bar
+        p_bar_backup = None if p_bar is None else p_bar.clone()
 
         u = problem.apply_dirichlet(u, load_factor)
         info: dict = {"min_J": float("nan")}
@@ -564,7 +588,8 @@ class QuasiStaticSolver:
         else:
             info["reason"] = ("mixed volume constraint iteration limit")
 
-        problem.p_bar.copy_(p_bar_backup)
+        if p_bar_backup is not None:
+            problem.p_bar.copy_(p_bar_backup)
         return False, u_backup, info
 
     def _predict(self, u, increment, dlam, dlam_done, load_factor):
@@ -604,7 +629,7 @@ class QuasiStaticSolver:
                         device=problem.device) if u is None else u.clone()
 
         lam = 0.0
-        dlam = 1.0 / max(self.load_steps, 1)
+        dlam = min(1.0 / max(self.load_steps, 1), self.max_load_step)
         n_steps = 0
         dlam_prev = dlam
         attempts = 0
@@ -662,7 +687,7 @@ class QuasiStaticSolver:
                 if attempts >= self.max_attempts or dlam < self.min_load_step:
                     break
 
-        _, _, raw = problem.evaluate(u, lam, tangent=False)
+        _, _, raw = self._system(u, lam, tangent=False)
         final = raw.resolve()
         volume = problem.volume_diagnostics(u)
         if cuda:
@@ -688,3 +713,248 @@ class QuasiStaticSolver:
             cutbacks=cutbacks,
         )
         return u, report
+
+
+class DynamicSolver(QuasiStaticSolver):
+    r"""Elastodynamics by the generalized-alpha method.
+
+    Chung & Hulbert (1993).  The unknown of each step is the end-of-step
+    displacement; acceleration and velocity follow from the Newmark relations,
+    and the balance is imposed at the intermediate states
+    :math:`t_{n+1-\alpha_f}`, which is what lets the scheme damp the
+    unresolved high frequencies of a stiff mesh without damping the physical
+    motion.  ``rho_infinity`` is the spectral radius at infinite frequency:
+    ``1`` is the undamped trapezoidal rule, ``0.5`` -- the default, and what
+    the cardiac benchmarks use -- damps aggressively, ``0`` maximally.
+
+    Everything except the residual comes from :class:`QuasiStaticSolver`: the
+    energy-slope line search, the adaptive forcing term, the Krylov choice and
+    the cutback rules all apply per time step.  A step that fails is retried as
+    two half steps rather than abandoned, so a difficult moment costs
+    resolution there and nowhere else.
+
+    Loads that vary are given as schedules -- a callable pressure or active
+    tension -- and are evaluated at the intermediate time of each step.  A
+    constant load stays constant: physical time is not a continuation factor,
+    so nothing here ramps with the clock.  Prescribed displacements are applied
+    at their full value.
+
+    Parameters
+    ----------
+    dt:
+        Time step.
+    rho_infinity:
+        Numerical damping of the highest resolved frequency, in ``[0, 1]``.
+    """
+
+    def __init__(self, problem, dt: float, rho_infinity: float = 0.5,
+                 **options) -> None:
+        if problem.mass is None:
+            raise ValueError("dynamics needs the mass matrix: build the problem "
+                             "with a nonzero density")
+        super().__init__(problem, **options)
+        if not (np.isfinite(dt) and dt > 0.0):
+            raise ValueError(f"dt must be finite and positive, got {dt}")
+        if not 0.0 <= rho_infinity <= 1.0:
+            raise ValueError(f"rho_infinity must lie in [0, 1], got {rho_infinity}")
+        self.dt = float(dt)
+        rho = float(rho_infinity)
+        self.alpha_m = (2.0*rho - 1.0)/(rho + 1.0)
+        self.alpha_f = rho/(rho + 1.0)
+        self.gamma = 0.5 - self.alpha_m + self.alpha_f
+        self.beta = 0.25*(1.0 - self.alpha_m + self.alpha_f)**2
+        self.mass = problem.assembler.to_csr(problem.mass)
+
+    def _states(self, u: torch.Tensor):
+        """Newmark acceleration and velocity implied by an end-of-step ``u``."""
+        dt, beta, gamma = self._dt, self.beta, self.gamma
+        a = (u - self._u - dt*self._v - dt*dt*(0.5 - beta)*self._a)/(beta*dt*dt)
+        v = self._v + dt*((1.0 - gamma)*self._a + gamma*a)
+        return v, a
+
+    def _system(self, u, load_factor, tangent):
+        v, a = self._states(u)
+        af, am = self.alpha_f, self.alpha_m
+        R, values, info = self.problem.evaluate(
+            (1.0 - af)*u + af*self._u, 1.0, tangent,
+            velocity=(1.0 - af)*v + af*self._v,
+            velocity_scale=self.gamma/(self.beta*self._dt), time=self._time)
+
+        inertia = self.mass @ ((1.0 - am)*a + am*self._a)
+        R = R + inertia
+        if tangent:
+            values = ((1.0 - af)*values
+                      + ((1.0 - am)/(self.beta*self._dt**2))*self.problem.mass)
+        # The residual and its scale must both count the inertia, or the
+        # convergence test measures a force the step is not balancing.
+        info = replace(
+            info, residual_norm=self.problem.constraints.free_norm(R),
+            internal_norm=torch.maximum(info.internal_norm,
+                                        torch.linalg.vector_norm(inertia)))
+        return R, values, info
+
+    def solve(self, t_end: float, u: Optional[torch.Tensor] = None,
+              velocity: Optional[torch.Tensor] = None,
+              observer=None) -> Tuple[torch.Tensor, SolveReport]:
+        """March from ``t = 0`` to ``t_end``.
+
+        ``u`` and ``velocity`` are the initial conditions; the initial
+        acceleration is not assumed but solved from ``M a = -R(u, v)``, since
+        a body released away from equilibrium accelerates from the first
+        instant and starting it at rest would misplace the whole history.
+
+        ``observer(t, u, v, a)`` is called after each accepted step, which is
+        how a time history is recorded without the solver knowing what is
+        being measured.
+        """
+        problem = self.problem
+        cuda = problem.device.type == "cuda"
+        if cuda:
+            torch.cuda.reset_peak_memory_stats(problem.device)
+            torch.cuda.synchronize(problem.device)
+        start = time.time()
+        self._newton_count = self._krylov_count = 0
+        cutbacks: Dict[str, int] = {}
+
+        self._u, self._v = self._initial_state(u, velocity)
+        self._a = self._initial_acceleration()
+        if observer is not None:
+            observer(0.0, self._u, self._v, self._a)
+
+        t, steps, info = 0.0, 0, {"min_J": float("nan")}
+        # The initial state counts: a body released from a compressed
+        # configuration is at its worst before the first step is taken.
+        worst, worst_at = float(problem.jacobians(self._u).amin()), 0.0
+        while t < t_end - 1e-12:
+            dt = min(self.dt, t_end - t)
+            ok, info = self._advance(t, dt)
+            while not ok and dt > self.dt*self.min_load_step:
+                why = info.get("reason", "unknown")
+                cutbacks[why] = cutbacks.get(why, 0) + 1
+                dt *= 0.5
+                self._log(f"  cutback ({why}): dt -> {dt:.3e}")
+                ok, info = self._advance(t, dt)
+            if not ok:
+                break
+            t += dt
+            steps += 1
+            step_min = info.get("end_min_J", float("nan"))
+            if step_min == step_min and step_min < worst:      # skips NaN
+                worst, worst_at = step_min, t
+            self._log(f"  t = {t:.6f}  newton = {info.get('step_newton', 0):3d}  "
+                      f"min J = {step_min:.6f}")
+            if observer is not None:
+                observer(t, self._u, self._v, self._a)
+
+        # The residual of the last accepted step, not a fresh evaluation: the
+        # state has already advanced, so recomputing here would difference the
+        # converged displacement against itself and report a spurious
+        # acceleration -- and with it a residual the solve never had.
+        volume = problem.volume_diagnostics(self._u)
+        if cuda:
+            torch.cuda.synchronize(problem.device)
+        return self._u, SolveReport(
+            converged=t >= t_end - 1e-12, load_factor=t, load_steps=steps,
+            newton_iterations=self._newton_count,
+            linear_iterations=self._krylov_count,
+            volume_error=volume["constraint_error"],
+            min_jacobian=info.get("end_min_J", volume["min_jacobian"]),
+            residual=info.get("residual_norm", float("nan")),
+            wall_time=time.time() - start,
+            volume=volume, cutbacks=cutbacks,
+            peak_memory_mib=(torch.cuda.max_memory_allocated(problem.device)/2**20
+                             if cuda else 0.0),
+            worst_jacobian=worst if worst < float("inf") else float("nan"),
+            worst_jacobian_time=worst_at)
+
+    def _initial_state(self, u, velocity):
+        """Initial displacement and velocity, checked against the boundary.
+
+        A degree of freedom held fixed for all time has a prescribed
+        displacement and therefore no velocity.  Initial data saying otherwise
+        describes a different problem from the one the boundary conditions
+        state, and every later step inherits the contradiction, so it is
+        rejected here rather than quietly overwritten.  Omitted data is
+        initialised to satisfy the boundary.
+        """
+        problem = self.problem
+        zero = torch.zeros(problem.n_dofs, dtype=problem.dtype,
+                           device=problem.device)
+        fixed = problem.constraints.mask
+        atol = problem.constraints.atol
+        u = problem.apply_dirichlet(zero.clone(), 1.0) if u is None else u.clone()
+        v = zero.clone() if velocity is None else velocity.clone()
+        for name, field in (("displacement", u), ("velocity", v)):
+            if field.shape != zero.shape:
+                raise ValueError(f"initial {name} must have {zero.numel()} "
+                                 f"entries, got {tuple(field.shape)}")
+            if not bool(torch.isfinite(field).all()):
+                raise ValueError(f"initial {name} must be finite")
+        if float((fixed*(u - problem.apply_dirichlet(u.clone(), 1.0))).abs().max()) > atol:
+            raise ValueError("initial displacement disagrees with the prescribed "
+                             "Dirichlet values on constrained degrees of freedom")
+        if float((fixed*v).abs().max()) > atol:
+            raise ValueError("initial velocity is nonzero on degrees of freedom "
+                             "held fixed for all time")
+        return u, v
+
+    def _initial_acceleration(self) -> torch.Tensor:
+        """Solve ``M a = -R(u, v)`` at ``t = 0``, on the free degrees of freedom.
+
+        The elimination has to happen *before* the solve.  Solving the whole
+        mass system and zeroing the constrained accelerations afterwards is not
+        the same problem: the constrained columns still couple into the free
+        equations, so every free acceleration comes out wrong.
+        """
+        problem = self.problem
+        R = problem.evaluate(self._u, 1.0, tangent=False, velocity=self._v,
+                             time=0.0)[0]
+        rhs = problem.constraints.zero_constrained(-R)
+        if not bool(rhs.any()):
+            return torch.zeros_like(rhs)
+
+        # A copy: the physical mass matrix is still needed, unconstrained, by
+        # the inertia term of every step.
+        mass = problem.mass.clone()
+        problem.assembler.apply_constraints(mass)
+        solver = ConjugateGradient(BlockJacobiPreconditioner(), rtol=1e-10,
+                                   max_iter=2000)
+        solver.preconditioner.update(problem.assembler, mass)
+        result = solver.solve(problem.assembler.to_csr(mass), rhs)
+        if not result.converged:
+            raise RuntimeError("could not solve for the initial acceleration "
+                               f"(relative residual {result.residual:.2e})")
+        return problem.constraints.zero_constrained(result.x)
+
+    def _advance(self, t: float, dt: float) -> Tuple[bool, dict]:
+        """One step of size ``dt``; on success the state is advanced.
+
+        Generalized-alpha balances forces at an *intermediate* state, so that
+        state being admissible says nothing about the end state that actually
+        gets committed -- a step can converge on an intermediate configuration
+        with positive Jacobians and still end on an inverted one.  The end
+        state is therefore checked on its own before it is accepted.
+        """
+        problem = self.problem
+        self._dt = dt
+        self._time = t + (1.0 - self.alpha_f)*dt
+        p_bar = problem.p_bar
+        p_bar_backup = None if p_bar is None else p_bar.clone()
+
+        ok, u, info = self._solve_step(self._u.clone(), 1.0)
+        if not ok:
+            return False, info
+
+        v, a = self._states(u)
+        end_min_J = float(problem.jacobians(u).amin())
+        finite = all(bool(torch.isfinite(x).all()) for x in (u, v, a))
+        info = dict(info, end_min_J=end_min_J)
+        if not (finite and end_min_J > 0.0):
+            info["reason"] = ("non-finite end state" if not finite
+                              else f"inverted end state (min J = {end_min_J:.4f})")
+            if p_bar_backup is not None:
+                p_bar.copy_(p_bar_backup)
+            return False, info
+
+        self._u, self._v, self._a = u, v, a
+        return True, info

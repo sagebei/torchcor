@@ -19,7 +19,7 @@ from torchcor.mechanics.material import (
 )
 from torchcor.mechanics.mesh import TruncatedEllipsoidMesh
 from torchcor.mechanics.benchmark import report as reporting
-from torchcor.mechanics.benchmark.ventricle import (
+from torchcor.mechanics.benchmark.land.ventricle import (
     BASE_Z, ENDO, EPI, LAYERS, STATIONS, VentricleSolution,
 )
 
@@ -176,7 +176,8 @@ def write_midline_figure(solutions, path: Path):
 
 
 def main(argv=None):
-    args = reporting.arguments(__doc__.splitlines()[0], argv)
+    args = reporting.arguments(__doc__.splitlines()[0], argv,
+                               default_out=Path(__file__).with_name("p3"))
     meshes = [tuple(args.mesh)] if args.mesh else MESHES
     solutions = [solve_ventricle(mesh, device=args.device) for mesh in meshes]
     records = numeric_results(solutions)

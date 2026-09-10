@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import torch
-from torchcor.mechanics.benchmark.p2 import solve_ventricle
+from torchcor.mechanics.benchmark.land.p2 import solve_ventricle
 from torchcor.mechanics.elements import LagrangeHex
 
 
