@@ -84,6 +84,7 @@ class MeshReader:
         self.elems = Elems()
         self.regions: np.array = None
         self.fibres: np.array = None
+        self.sheets: np.array = None
 
     def read_nodes(self, unit_conversion=1000):
         with self.node_file.open("r") as f:
@@ -146,14 +147,19 @@ class MeshReader:
                     self.elems.Tt.region = self.regions[indices]
 
 
-    def read_fibres(self):
-        fibres = np.loadtxt(self.fibre_file, dtype=np.float32, skiprows=1)
-        norms = np.linalg.norm(fibres, axis=1, keepdims=True)
-        
+    @staticmethod
+    def _unit(vectors):
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
         mask = norms[:, 0] > 1e-10
-        fibres[mask] /= norms[mask]
+        vectors[mask] /= norms[mask]
+        return vectors
 
-        self.fibres = fibres
+    def read_fibres(self):
+        data = np.loadtxt(self.fibre_file, dtype=np.float32, skiprows=1)
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+        self.fibres = self._unit(data[:, :3])
+        self.sheets = self._unit(data[:, 3:6].copy()) if data.shape[1] >= 6 else None
     
     def read(self, unit_conversion=1000):
         self.read_nodes(unit_conversion)

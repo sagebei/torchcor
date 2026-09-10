@@ -5,14 +5,24 @@ DESKTOP=1
 if [ $DESKTOP -eq 1 ]
 then
   export WORKDIR=$PWD
-  # The Eikonal/DREAM physics aborts under MPI ("Use openMP instead"), so a
-  # single rank is mandatory.  Note the openCARP v20 .deb is built WITHOUT
-  # OpenMP, so it runs single-threaded regardless; OMP_NUM_THREADS only helps
-  # against a source build configured with OpenMP.
+  # The Eikonal/DREAM physics aborts under MPI ("DREAM/Eikonal physics
+  # currently do not support MPI parallelization. Use openMP instead."), so a
+  # single rank is mandatory and threads are the only parallelism available.
+  #
+  # The distributed v20 .deb is built with USE_OPENMP=UTILS, which leaves the
+  # physics serial -- it links no libgomp at all.  OPENCARP_OMP below points at
+  # a source build configured with -DUSE_OPENMP=ON, whose tenTusscherPanfilov
+  # node loop and eikonal solver are threaded.  Results are bit-identical to
+  # the .deb build and to each other at every thread count.
+  #
+  # Measured on 20 ms of this case (48-core host): 1 thread 187 s, 8 threads
+  # 45 s, 24 threads 30 s, 48 threads 39 s.  It is memory-bandwidth bound, so
+  # 24 is the best setting and using every core is slower than using half.
   NPROCS=1
-  export OMP_NUM_THREADS=${OMP_NUM_THREADS:-$(nproc)}
+  export OMP_NUM_THREADS=${OMP_NUM_THREADS:-24}
   GROUPBASE='/usr/local/lib/opencarp'
-  CARPDIR=${GROUPBASE}'/bin'
+  OPENCARP_OMP=${OPENCARP_OMP:-$HOME/opencarp-omp/bin}
+  CARPDIR=$([ -x "${OPENCARP_OMP}/openCARP" ] && echo ${OPENCARP_OMP} || echo ${GROUPBASE}/bin)
 #  EXTIMP=${WORKDIR}'/ionic_model/mMS.so'
 #  EXTIMPSTR="-num_external_imp 1 -external_imp ${EXTIMP}"
   CARPBIN="openCARP ${EXTIMPSTR}"

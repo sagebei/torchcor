@@ -14,6 +14,10 @@ parab_solve    = 1
 # Physics Regions
 #===================================
 # Assign the whole myocardium to the Eikonal physics (ptype 2).
+# This file and demo/eikonal_ventricle.py describe the same simulation:
+# same mesh, ionic model and cell type, same conduction velocities, same
+# stimulus sites and onsets, same foot current, dt and duration.  Compare with
+#   python benchmark/opencarp/reaction_eikonal/compare.py
 num_phys_regions         = 1
 phys_region[0].name      = "eikonal"
 phys_region[0].ptype     = 2          # 0: Intracellular Electrics, 2: Eikonal
@@ -52,6 +56,15 @@ imp_region[0].im         = tenTusscherPanfilov
 imp_region[0].cellSurfVolRatio = 0.14
 imp_region[0].im_param   = "flags=ENDO"
 
+# Trigger (foot) current, pinned rather than left to the defaults so that
+# demo/eikonal_ventricle.py can state the same four numbers and the two runs
+# are comparable without depending on either code's default changing.
+#   I_foot(s) = A_F/tau_F * exp(s/tau_F) for s in [0, 5] ms, off once Vm >= V_th
+imp_region[0].dream.Idiff.model = 0        # 0: AP foot, 1: triple Gaussian
+imp_region[0].dream.Idiff.A_F   = 0.91     # [mV]
+imp_region[0].dream.Idiff.tau_F = 0.25     # [ms]
+imp_region[0].dream.Idiff.V_th  = -30      # [mV]
+
 #===================================
 # Conduction Velocities / Conductivities
 #===================================
@@ -71,6 +84,17 @@ gregion[0].ID[1]         = 35       # LV
 gregion[0].dream.vel_l   = 600      # [mm/s] CV along the fibre direction  (0.60 m/s)
 gregion[0].dream.vel_t   = 380      # [mm/s] CV transverse to the fibre    (0.38 m/s)
 gregion[0].dream.vel_n   = 380      # [mm/s] CV normal to the fibre        (0.38 m/s)
+# Monodomain conductivities, used only by RE+ (dream.solve = 1); the
+# eikonal takes its speeds from dream.vel_* above.  These are the same
+# four numbers demo/eikonal_ventricle.py passes to add_conductivity.
+# They are NOT calibrated to reproduce the dream.vel_* speeds -- that is
+# a separate tuning step -- so in RE+ the diffusion term loads the
+# prescribed front rather than reproducing it.  Both codes use the same
+# values, which is what makes the comparison meaningful.
+gregion[0].g_il         = 0.174    # [S/m]
+gregion[0].g_it         = 0.019
+gregion[0].g_el         = 0.625
+gregion[0].g_et         = 0.236
 
 gregion[1].num_IDs       = 3
 gregion[1].ID[0]         = 44 #RV_subendo
@@ -79,6 +103,17 @@ gregion[1].ID[2]         = 46 #RVseptum_subendo
 gregion[1].dream.vel_l   = 900      # [mm/s] (0.90 m/s)
 gregion[1].dream.vel_t   = 410      # [mm/s] (0.41 m/s)
 gregion[1].dream.vel_n   = 410      # [mm/s] (0.41 m/s)
+# Monodomain conductivities, used only by RE+ (dream.solve = 1); the
+# eikonal takes its speeds from dream.vel_* above.  These are the same
+# four numbers demo/eikonal_ventricle.py passes to add_conductivity.
+# They are NOT calibrated to reproduce the dream.vel_* speeds -- that is
+# a separate tuning step -- so in RE+ the diffusion term loads the
+# prescribed front rather than reproducing it.  Both codes use the same
+# values, which is what makes the comparison meaningful.
+gregion[1].g_il         = 0.174    # [S/m]
+gregion[1].g_it         = 0.019
+gregion[1].g_el         = 0.625
+gregion[1].g_et         = 0.236
 
 
 

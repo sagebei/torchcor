@@ -1,0 +1,11 @@
+# RE+ overrides.  Use alongside the main file, which it takes everything else
+# from -- mesh, ionic model, velocities, conductivities, stimuli, dt, duration:
+#
+#   openCARP +F parameters.par +F re_plus.par -meshname .../Case_1
+#
+# RE+ (dream.solve = 1) adds the monodomain diffusion operator to the
+# eikonal-triggered reaction, so it solves a linear system every step.  That
+# solve is not threaded in openCARP -- electrics.cc carries no OpenMP pragmas --
+# so RE+ is about 4.7x slower than RE- here even on the threaded build.
+dream.solve = 1
+simID       = "biv_rep"

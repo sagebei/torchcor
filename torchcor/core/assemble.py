@@ -1,6 +1,18 @@
 import torch
 
 
+def scatter_global(connectivity, Ke_batch, Me_batch, n_vertices):
+    n = connectivity.shape[1]
+    rows = connectivity.unsqueeze(2).expand(-1, -1, n).reshape(-1)
+    cols = connectivity.unsqueeze(1).expand(-1, n, -1).reshape(-1)
+    indices = torch.stack([rows, cols])
+    size = (n_vertices, n_vertices)
+    K = torch.sparse_coo_tensor(indices, Ke_batch.reshape(-1), size).coalesce()
+    M = torch.sparse_coo_tensor(indices, Me_batch.reshape(-1), size).coalesce()
+    return K, M
+
+
+
 class Matrices1D_3DSurface:
     def __init__(self, vertices, elems, device, dtype):
         self.elems = elems
@@ -92,33 +104,7 @@ class Matrices1D:
 
     def assemble_matrices(self, sigma):
         Me_batch, Ke_batch = self.construct_local_matrices(sigma)
-
-        rows, cols, K_vals, M_vals = [], [], [], []
-
-        for i in range(2):
-            for j in range(2):
-                rows.extend(self.lines[:, i].tolist())
-                cols.extend(self.lines[:, j].tolist())
-                K_vals.extend(Ke_batch[:, i, j].tolist())
-                M_vals.extend(Me_batch[:, i, j].tolist())
-
-        K = torch.sparse_coo_tensor(
-            indices=[rows, cols],
-            values=K_vals,
-            size=(self.n_vertices, self.n_vertices),
-            device=self.device,
-            dtype=self.dtype
-        ).coalesce()
-
-        M = torch.sparse_coo_tensor(
-            indices=[rows, cols],
-            values=M_vals,
-            size=(self.n_vertices, self.n_vertices),
-            device=self.device,
-            dtype=self.dtype
-        ).coalesce()
-
-        return K, M
+        return scatter_global(self.lines, Ke_batch, Me_batch, self.n_vertices)
 
 
 
@@ -185,35 +171,8 @@ class Matrices2D:
         return Me_batch, Ke_batch
 
     def assemble_matrices(self, sigma):
-        # Precompute vertex coordinates for all triangles
         Me_batch, Ke_batch = self.construct_local_matrices(sigma)
-        # Lists to store the indices and values of non-zero elements for K and M
-        rows, cols, K_vals, M_vals = [], [], [], []
-        # Collect contributions for global matrices in sparse form
-        for i in range(3):
-            for j in range(3):
-                rows.extend(self.triangles[:, i].tolist())
-                cols.extend(self.triangles[:, j].tolist())
-                K_vals.extend(Ke_batch[:, i, j].tolist())
-                M_vals.extend(Me_batch[:, i, j].tolist())
-
-        # Create sparse tensors from the accumulated lists
-        K = torch.sparse_coo_tensor(
-            indices=[rows, cols],
-            values=K_vals,
-            size=(self.n_vertices, self.n_vertices)
-        )
-
-        M = torch.sparse_coo_tensor(
-            indices=[rows, cols],
-            values=M_vals,
-            size=(self.n_vertices, self.n_vertices)
-        )
-
-        K = K.to(device=self.device, dtype=self.dtype)
-        M = M.to(device=self.device, dtype=self.dtype)
-
-        return K.coalesce(), M.coalesce()
+        return scatter_global(self.triangles, Ke_batch, Me_batch, self.n_vertices)
     
 
 class Matrices3DSurface(Matrices2D):
@@ -335,34 +294,5 @@ class Matrices3D:
         return Me_batch, Ke_batch
 
     def assemble_matrices(self, sigma):
-        # Precompute vertex coordinates for all tetrahedrons
         Me_batch, Ke_batch = self.construct_local_matrices(sigma)
-        
-        # Lists to store the indices and values of non-zero elements for K and M
-        rows, cols, K_vals, M_vals = [], [], [], []
-        
-        # Collect contributions for global matrices in sparse form
-        for i in range(4):
-            for j in range(4):
-                rows.extend(self.tetrahedrons[:, i].tolist())
-                cols.extend(self.tetrahedrons[:, j].tolist())
-                K_vals.extend(Ke_batch[:, i, j].tolist())
-                M_vals.extend(Me_batch[:, i, j].tolist())
-
-        # Create sparse tensors from the accumulated lists
-        K = torch.sparse_coo_tensor(
-            indices=[rows, cols],
-            values=K_vals,
-            size=(self.n_vertices, self.n_vertices)
-        )
-
-        M = torch.sparse_coo_tensor(
-            indices=[rows, cols],
-            values=M_vals,
-            size=(self.n_vertices, self.n_vertices)
-        )
-
-        K = K.to(device=self.device, dtype=self.dtype)
-        M = M.to(device=self.device, dtype=self.dtype)
-
-        return K.coalesce(), M.coalesce()
+        return scatter_global(self.tetrahedrons, Ke_batch, Me_batch, self.n_vertices)

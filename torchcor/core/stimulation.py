@@ -27,14 +27,18 @@ class Stimuli:
     def load_stimulus_region(self, vtx_filepath):
         with Path(vtx_filepath).open("r") as f:
             region_size = int(f.readline().strip())
-    
-        region = np.loadtxt(vtx_filepath, dtype=int, skiprows=2)
-        
-        if len(region) != region_size:
-            raise Exception(f"Error loading {vtx_filepath}")
-        
+
+        region = np.loadtxt(vtx_filepath, dtype=int, skiprows=2, ndmin=1)
+
+        if region.size != region_size:
+            raise Exception(f"{vtx_filepath} declares {region_size} nodes but lists "
+                            f"{region.size}")
+        if region.size and (region.min() < 0 or region.max() >= self.n_nodes):
+            raise Exception(f"{vtx_filepath} refers to nodes outside the mesh: "
+                            f"indices must lie in [0, {self.n_nodes})")
+
         return torch.from_numpy(region).to(dtype=torch.long, device=self.device)
-    
+
     def save_stimulus_region(self, region, vtx_filepath):
         region = region.astype(np.int64).reshape(-1)
 

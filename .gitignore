@@ -48,6 +48,17 @@ logs
 results/
 results
 results/*
+results_rep/
+
+# Simulation output: openCARP writes its simID directory and a run log next to
+# the parameter file; the demos write their own result directories.
+benchmark/opencarp/**/biv/
+benchmark/opencarp/**/biv_rep/
+benchmark/opencarp/**/out_CARP
+benchmark/opencarp/**/out_REP
+demo/biventricle_eikonal*/
+demo/eikonal_atrium*/
+demo/monodomain_*/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
