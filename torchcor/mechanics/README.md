@@ -55,7 +55,11 @@ Lagrangian updates enforce incompressibility in a discrete pressure space.
 An unsuccessful increment restores the accepted displacement and multiplier
 state before retrying at a smaller increment.
 
-Quadratic elements use four discontinuous pressure modes per element.
+Quadratic elements use four discontinuous pressure modes per element. That
+mixed path is exercised and verified on hexahedra; on tetrahedra it is
+constructed the same way but is not covered by the tests, and the cardiac
+benchmarks do not reach it because their law carries its own volumetric
+penalty (`bulk_modulus=None`). Treat it as untested there.
 Pressure and dilatation are eliminated locally at each augmentation iteration,
 leaving a displacement system for the sparse linear solver. Physical-volume
 weights and the derivative of this elimination appear in both residual and

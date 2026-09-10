@@ -190,6 +190,77 @@ class Validation(unittest.TestCase):
                                             complete=False))
 
 
+class Benchmark2(unittest.TestCase):
+    """Benchmark 2's loading is its own, not benchmark 1's."""
+
+    def test_activation_follows_table_8(self):
+        """The biventricular timings differ from benchmark 1's.
+
+        Table 8 gives t_sys = 0.163 s and t_dias = 0.5 s, against 0.16 and
+        0.484 in benchmark 1. The reference implementation's shared defaults
+        are benchmark 1's, so copying them silently halves the tension through
+        the second half of the beat while leaving the peak nearly unchanged --
+        which the comparison scores do not catch.
+        """
+        from torchcor.mechanics.benchmark.arostica.b2 import b2
+        self.assertEqual(b2.ACTIVE["t_sys"], 0.163)
+        self.assertEqual(b2.ACTIVE["t_dias"], 0.5)
+        tau = b2.active_schedule()
+        # Fig. 6's peak, to the accuracy the tabulated ODE reproduces it.
+        self.assertAlmostEqual(tau.peak/b2.ACTIVE_PEAK, 1.0, delta=0.01)
+        # The discriminating sample: benchmark 1's timing gives 75.7 kPa here.
+        self.assertAlmostEqual(tau(0.5)/1e3, 117.2, delta=0.5)
+
+    def test_pressures_follow_table_9(self):
+        """Both cavities, against the maxima the table states."""
+        from torchcor.mechanics.benchmark.arostica.b2 import b2
+        for name, parameters, peak in (("lv", b2.LV_PRESSURE, 16491.14),
+                                       ("rv", b2.RV_PRESSURE, 4166.66)):
+            with self.subTest(cavity=name):
+                self.assertEqual(parameters["t_sys"], 0.17)
+                self.assertEqual(parameters["t_dias"], 0.484)
+                self.assertAlmostEqual(
+                    b2.pressure_schedule(parameters).peak/peak, 1.0, delta=0.01)
+
+    def test_the_table_keeps_every_refinement_level(self):
+        """A second level must add rows, not replace the first level's.
+
+        The per-run result files carry the resolution in their names, but the
+        combined table does not -- it is one file with a ``mesh`` column -- so
+        writing it from the run that just finished silently discards whichever
+        level ran first.
+        """
+        import csv
+        import json
+        import tempfile
+        from collections import Counter
+        from pathlib import Path
+        from torchcor.mechanics.benchmark.arostica.b2 import b2
+
+        grid = [0.0, 0.5, 1.0]
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder)
+            for level, dofs in (("coarse", 227364), ("fine", 574728)):
+                (out/f"b2_{level}_dt0.002.json").write_text(json.dumps({
+                    "mesh": level, "dofs": dofs, "dt_s": 2e-3, "time_s": grid,
+                    "displacement_m": {p: [[0.0, 0.0, 0.0]]*len(grid)
+                                       for p in b2.PROBES}}))
+            rows = list(csv.reader(b2.write_csv(out).open()))
+        counts = Counter(row[0] for row in rows[1:])
+        self.assertEqual(counts, {"coarse": len(grid), "fine": len(grid)})
+
+    def test_each_refinement_level_is_scored_against_its_own_population(self):
+        """Resolution must select mesh, filename and participants together."""
+        from torchcor.mechanics.benchmark.arostica.b2 import b2, geometry
+        from torchcor.mechanics.benchmark.arostica.b2 import reference as b2ref
+        self.assertEqual(tuple(b2ref.CASES), geometry.RESOLUTIONS)
+        for level in geometry.RESOLUTIONS:
+            with self.subTest(resolution=level):
+                self.assertEqual(len(b2ref.participants(level)), len(b2ref.TEAMS))
+        with self.assertRaises(ValueError):
+            geometry.BiventricleMesh.load("medium", device=DEV)
+
+
 class PublishedMesh(unittest.TestCase):
     """The tetrahedral mesh the participants were given, as loaded."""
 

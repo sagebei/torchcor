@@ -32,6 +32,7 @@ dependencies = [
 packages = [
     "torchcor", 
     "torchcor.core", 
+    "torchcor.mechanics",
     "torchcor.ionic", 
     "torchcor.simulator",
     "torchcor.ecg",

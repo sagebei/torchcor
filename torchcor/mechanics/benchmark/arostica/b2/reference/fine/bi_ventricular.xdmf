@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
+<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+  <Domain>
+    <Grid Name="mesh" GridType="Uniform">
+      <Topology NumberOfElements="121133" TopologyType="Tetrahedron" NodesPerElement="4">
+        <DataItem Dimensions="121133 4" NumberType="UInt" Format="HDF">bi_ventricular.h5:/Mesh/mesh/topology</DataItem>
+      </Topology>
+      <Geometry GeometryType="XYZ">
+        <DataItem Dimensions="27807 3" Format="HDF">bi_ventricular.h5:/Mesh/mesh/geometry</DataItem>
+      </Geometry>
+    </Grid>
+    <Grid Name="mesh" GridType="Uniform">
+      <Topology NumberOfElements="257096" TopologyType="Triangle" NodesPerElement="3">
+        <DataItem Dimensions="257096 3" NumberType="UInt" Format="HDF">bi_ventricular.h5:/MeshFunction/0/mesh/topology</DataItem>
+      </Topology>
+      <Geometry Reference="XML">/Xdmf/Domain/Grid/Geometry</Geometry>
+      <Attribute Name="f" AttributeType="Scalar" Center="Cell">
+        <DataItem Dimensions="257096 1" Format="HDF">bi_ventricular.h5:/MeshFunction/0/values</DataItem>
+      </Attribute>
+    </Grid>
+  </Domain>
+</Xdmf>

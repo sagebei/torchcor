@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>
+<Xdmf Version="3.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+  <Domain>
+    <Grid Name="TimeSeries" GridType="Collection" CollectionType="Temporal">
+      <Grid Name="mesh" GridType="Uniform">
+        <Topology NumberOfElements="121133" TopologyType="Tetrahedron" NodesPerElement="4">
+          <DataItem Dimensions="121133 4" NumberType="UInt" Format="HDF">fiber_directions.h5:/Mesh/0/mesh/topology</DataItem>
+        </Topology>
+        <Geometry GeometryType="XYZ">
+          <DataItem Dimensions="27807 3" Format="HDF">fiber_directions.h5:/Mesh/0/mesh/geometry</DataItem>
+        </Geometry>
+        <Time Value="0.000000000000000e+00" />
+        <Attribute Name="fiber" AttributeType="Vector" Center="Node">
+          <DataItem Dimensions="27807 3" Format="HDF">fiber_directions.h5:/VisualisationVector/0</DataItem>
+        </Attribute>
+        <Attribute Name="sheet" AttributeType="Vector" Center="Node">
+          <DataItem Dimensions="27807 3" Format="HDF">fiber_directions.h5:/VisualisationVector/1</DataItem>
+        </Attribute>
+        <Attribute Name="sheet_normal" AttributeType="Vector" Center="Node">
+          <DataItem Dimensions="27807 3" Format="HDF">fiber_directions.h5:/VisualisationVector/2</DataItem>
+        </Attribute>
+      </Grid>
+    </Grid>
+  </Domain>
+</Xdmf>
