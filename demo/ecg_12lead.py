@@ -1,8 +1,8 @@
 import torch
 import torchcor as tc
-from torchcor.simulator import Monodomain
+from torchcor.electrophysiology import Monodomain
 from torchcor.ionic import TenTusscherPanfilov
-from torchcor.ecg import LeadField
+from torchcor.electrocardiogram import LeadField
 from pathlib import Path
 
 # Specify the GPU device for running the simulation

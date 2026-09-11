@@ -6,7 +6,7 @@ Tutorials
 
    monodomain
    reaction_eikonal
-   ecg
+   electrocardiogram
 
 Choosing a model
 ----------------

@@ -18,14 +18,14 @@ from pathlib import Path
 # Resolve imports against THIS repo so the edited torchcor (with mass_lumping)
 # is used instead of any pip-installed copy in site-packages.
 _HERE = Path(__file__).resolve()
-sys.path.insert(0, str(_HERE.parents[1]))   # .../torchcor   -> enables `import ecg.*`
+sys.path.insert(0, str(_HERE.parents[1]))
 sys.path.insert(0, str(_HERE.parents[2]))   # .../           -> `import torchcor` == this repo
 os.chdir(_HERE.parent)
 
 import torchcor as tc
-from torchcor.simulator import Monodomain
+from torchcor.electrophysiology import Monodomain
 from torchcor.ionic import TenTusscherPanfilov
-from torchcor.ecg import LeadField
+from torchcor.electrocardiogram import LeadField
 
 # ---------- Config ----------
 device = torch.device("cuda:0")
@@ -111,4 +111,3 @@ np.savez(ecg_file, dt_ms=1.0, **{lead: sig.cpu().numpy() for lead, sig in ecg.it
 print(f"Saved torchcor 12-lead ECG to {ecg_file}")
 print("Run `python match.py` to overlay it against the openCARP ground truth.")
 print("Done.")
-

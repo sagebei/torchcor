@@ -1,5 +1,5 @@
 import torchcor as tc
-from torchcor.simulator import ReactionEikonal
+from torchcor.electrophysiology import ReactionEikonal
 from torchcor.ionic import ModifiedMS2v
 from pathlib import Path
 

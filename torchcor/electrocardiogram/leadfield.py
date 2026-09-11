@@ -346,7 +346,7 @@ class LeadField:
         """
         Verify the standalone heart mesh is the same sub-domain of the
         torso mesh we just extracted.  Both must share node ordering
-        (guaranteed by torchcor.ecg.torso_heart.TorsoHeartMesh) and the
+        (guaranteed by torchcor.electrocardiogram.torso_heart.TorsoHeartMesh) and the
         positions must match to floating-point precision.
         """
         n_heart  = self.heart_nodes.shape[0]

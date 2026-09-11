@@ -4,7 +4,7 @@ API reference
 .. toctree::
    :maxdepth: 2
 
-   simulator
+   electrophysiology
    ionic
-   ecg
+   electrocardiogram
    core

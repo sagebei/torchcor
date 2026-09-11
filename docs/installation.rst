@@ -63,7 +63,7 @@ Verify the installation
    import torchcor as tc
    print(tc.get_device())          # cuda:0  (or cpu)
 
-   from torchcor.simulator import Monodomain, ReactionEikonal
+   from torchcor.electrophysiology import Monodomain, ReactionEikonal
    from torchcor.ionic import TenTusscherPanfilov
    print("torchcor is ready")
 

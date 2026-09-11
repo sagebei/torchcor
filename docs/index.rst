@@ -35,7 +35,7 @@ What's inside
       filled in — a fraction of monodomain cost.
 
    .. grid-item-card:: 📈 ECGs & electrograms
-      :link: tutorials/ecg
+      :link: tutorials/electrocardiogram
       :link-type: doc
 
       Body-surface 12-lead ECGs from the transmembrane voltage via a

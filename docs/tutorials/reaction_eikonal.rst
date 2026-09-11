@@ -21,7 +21,7 @@ The eikonal field *is* the activation map -- no reaction needed:
 
 .. code-block:: python
 
-   from torchcor.simulator import ReactionEikonal
+   from torchcor.electrophysiology import ReactionEikonal
    from torchcor.ionic import ModifiedMS2v
 
    im = ModifiedMS2v(dt=0.01)

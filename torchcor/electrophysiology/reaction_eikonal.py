@@ -11,7 +11,7 @@ import torchcor as tc
 from pathlib import Path
 from torchcor.core.mesh import MeshReader, region_node_idx
 from torchcor.core.stimulation import Stimuli
-from torchcor.simulator.monodomain import Monodomain
+from torchcor.electrophysiology.monodomain import Monodomain
 
 
 # A large but finite "infinity" for not-yet-reached arrival times. Keeping it
@@ -580,6 +580,72 @@ class ReactionEikonal(Monodomain):
         return (fields["foot_amp"], fields["tau_foot"],
                 fields["v_th"], fields["t_foot"])
 
+    # ----- coupling to contraction ----- #
+    #: Ionic models whose ``Cai`` this reader understands.  Each was checked
+    #: against the resting and peak calcium its publication reports: all six
+    #: hold micromolar between calls, though they reach that by different
+    #: internal scalings, so the list is explicit rather than assumed.
+    #: ``model name -> (attribute, factor to micromolar)``.  Most models update
+    #: ``Cai`` in place and it is current.  Tomek20 is the exception: it forms
+    #: ``Cai`` from the *previous* ``Cai_mM`` and publishes both, so reading
+    #: ``Cai`` returns the calcium of one step ago.  Its live state is
+    #: ``Cai_mM`` in millimolar, so that is what is read -- an adapter here,
+    #: leaving the ionic equations alone.
+    CALCIUM_MODELS = {"TenTusscherPanfilov": ("Cai", 1.0),
+                      "Tomek19": ("Cai", 1.0),
+                      "Tomek20": ("Cai_mM", 1.0e3),
+                      "TWorld": ("Cai", 1.0),
+                      "OHaraRudy": ("Cai", 1.0),
+                      "CourtemancheRamirezNattel": ("Cai", 1.0)}
+
+    def calcium(self, out=None):
+        """Cytosolic calcium in micromolar, per node, on the device.
+
+        Written into ``out`` when given, so a caller stepping a contraction
+        model can reuse one buffer instead of allocating every step.  Nodes
+        claimed by more than one ionic model are resolved the way the voltage
+        is: the last model listed owns them.
+        """
+        if out is None:
+            out = torch.empty(self.n_nodes, device=self.device, dtype=self.dtype)
+        for im in self.ionic_models:
+            name = type(im).__name__
+            if name not in self.CALCIUM_MODELS:
+                raise Exception(
+                    f"{name} carries no cytosolic calcium, so it cannot drive a "
+                    f"contraction model; use one of {', '.join(self.CALCIUM_MODELS)}")
+            attribute, factor = self.CALCIUM_MODELS[name]
+            out[im.node_indices] = getattr(im, attribute).to(dtype=out.dtype) * factor
+        return out
+
+    def save_state(self, vm, time=None):
+        """The complete state of a run: voltage and every ionic state variable.
+
+        Enough to continue a simulation exactly where it stopped, which is what
+        pre-pacing to steady state needs -- the calcium transient of the first
+        beat from default initial conditions is not the one a contraction model
+        should be driven with.
+        """
+        state = {"vm": vm.clone(), "time": float(self.T if time is None else time),
+                 "ionic": []}
+        for im in self.ionic_models:
+            n = im.node_indices.numel()
+            state["ionic"].append({name: value.clone()
+                                   for name, value in vars(im).items()
+                                   if torch.is_tensor(value) and value.shape == (n,)})
+        return state
+
+    def load_state(self, state):
+        """Restore what ``save_state`` captured; returns the voltage."""
+        if len(state["ionic"]) != len(self.ionic_models):
+            raise Exception(
+                f"saved state has {len(state['ionic'])} ionic models but this "
+                f"simulator has {len(self.ionic_models)}")
+        for im, saved in zip(self.ionic_models, state["ionic"]):
+            for name, value in saved.items():
+                getattr(im, name).copy_(value)
+        return state["vm"].clone()
+
     def set_diffusion_current(self, alpha, beta, gamma):
         tensor = lambda v: torch.as_tensor(v, device=self.device, dtype=self.dtype)
         alpha, beta, gamma = tensor(alpha), tensor(beta), tensor(gamma)
@@ -699,7 +765,26 @@ class ReactionEikonal(Monodomain):
 
     def solve(self, a_tol=1e-5, r_tol=1e-5, max_iter=100, linear_guess=True,
               snapshot_interval=5, verbose=True, result_path=None,
-              eikonal_tol=1e-3, eikonal_max_iter=100000):
+              eikonal_tol=1e-3, eikonal_max_iter=100000,
+              state=None, resume=False, on_step=None, record=True):
+        """Run the reaction-eikonal model.
+
+        ``state`` starts from a ``save_state`` snapshot instead of the ionic
+        models' default initial conditions.  By default that is a *new run from
+        a prepared initial condition* -- the clock starts at zero, which is
+        what pre-pacing to a steady state is for.  ``resume=True`` instead
+        continues the earlier run, restoring its clock so that trigger timing
+        and pacing phase carry over; a split run then matches an unbroken one.
+
+        ``on_step(t, vm, calcium)`` is called once before the first step with
+        the initial state at t = 0, and again after every completed step with
+        the time that step reached.  Both tensors are reused between calls, so
+        a caller that keeps them must clone.  This is how a contraction model
+        is driven; nothing about it belongs in this solver.
+
+        ``record=False`` returns only the final voltage rather than the whole
+        history, for coupled runs where the history is consumed as it is made.
+        """
         self.result_path = Path(result_path) if result_path is not None else None
         self.snapshot_interval = snapshot_interval
 
@@ -713,10 +798,18 @@ class ReactionEikonal(Monodomain):
         if self.diffusion:
             self.assemble()
 
-        # 3. initial state from the ionic models
+        # 3. initial state: the ionic models' own, or a saved one continued
         u = torch.zeros((self.n_nodes), dtype=self.dtype, device=self.device)
         for im in self.ionic_models:
             u[im.node_indices] = im.initialize(im.node_indices.shape[0]).clone()
+        start_time = 0.0
+        if state is not None:
+            u = self.load_state(state).to(dtype=self.dtype, device=self.device)
+            if resume:
+                # True continuation: pick the clock up where it was left, so the
+                # trigger current and any pacing keep their phase.  Without this
+                # the run restarts at t = 0 and re-fires every arrival.
+                start_time = state["time"]
         u_initial = u.clone()
 
         # 4. foot-current parameters, prescribed (see set_foot_current)
@@ -727,12 +820,16 @@ class ReactionEikonal(Monodomain):
             self.cg.initialize(x=u, linear_guess=linear_guess)
         ts_per_frame = self._snapshot_stride(snapshot_interval)
 
-        t = 0.0
+        t = start_time
         solving_time = time.time()
         total_ionic_time = 0.0
         total_electric_time = 0.0
         n_total_iter = 0
-        solution_list = [u_initial]
+        solution_list = [u_initial] if record else []
+        ca_buffer = None
+        if on_step is not None:
+            ca_buffer = torch.empty(self.n_nodes, device=self.device, dtype=self.dtype)
+            on_step(t, u, self.calcium(out=ca_buffer))
         for n in range(1, self.nt + 1):
             # The step is evaluated at the time it starts from, matching the
             # simulation time openCARP hands its trigger current; t advances
@@ -749,8 +846,10 @@ class ReactionEikonal(Monodomain):
             n_total_iter += n_iter
             total_ionic_time += ionic_time
             total_electric_time += electric_time
+            if on_step is not None:
+                on_step(t, u, self.calcium(out=ca_buffer))
 
-            if n % ts_per_frame == 0:
+            if record and n % ts_per_frame == 0:
                 solution_list.append(u.clone())
                 if verbose and snapshot_interval != self.T:
                     print(f"t: {round(t, 1)}/{self.T} |",
@@ -765,4 +864,4 @@ class ReactionEikonal(Monodomain):
                   f"ionic_time: {total_ionic_time:.2f}s | "
                   f"electric_time: {total_electric_time:.2f}s", flush=True)
 
-        return torch.stack(solution_list, dim=0)
+        return torch.stack(solution_list, dim=0) if record else u

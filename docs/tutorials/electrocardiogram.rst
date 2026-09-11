@@ -1,7 +1,7 @@
 ECGs and electrograms (lead field)
 ==================================
 
-:class:`~torchcor.ecg.leadfield.LeadField` turns a cardiac transmembrane voltage
+:class:`~torchcor.electrocardiogram.leadfield.LeadField` turns a cardiac transmembrane voltage
 ``Vm`` into body-surface potentials using the **reciprocal lead-field method** on
 a heart-torso finite-element mesh.  It solves the elliptic problem
 
@@ -18,7 +18,7 @@ Mesh requirement
 
 The heart mesh must be the **same sub-domain of the torso mesh** (shared node
 ordering), so that the ``Vm`` you computed on the heart maps onto the torso
-nodes.  Extract the heart with ``torchcor.ecg.torso_heart.TorsoHeartMesh``;
+nodes.  Extract the heart with ``torchcor.electrocardiogram.torso_heart.TorsoHeartMesh``;
 ``LeadField.build()`` verifies the node correspondence.
 
 Step 1 -- get the source ``Vm``
@@ -40,7 +40,7 @@ Step 2 -- assemble the lead field
 .. code-block:: python
 
    import torch
-   from torchcor.ecg import LeadField
+   from torchcor.electrocardiogram import LeadField
 
    lf = LeadField(torso_mesh_dir="/path/to/torso",
                   heart_mesh_dir="/path/to/heart",

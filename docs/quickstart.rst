@@ -6,7 +6,7 @@ A minimal **monodomain** simulation on an atrial surface mesh:
 .. code-block:: python
 
    import torchcor as tc
-   from torchcor.simulator import Monodomain
+   from torchcor.electrophysiology import Monodomain
    from torchcor.ionic import ModifiedMS2v
 
    tc.set_device("cuda:0")

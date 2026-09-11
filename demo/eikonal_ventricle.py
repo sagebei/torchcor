@@ -15,7 +15,7 @@ import torch
 
 import torchcor as tc
 from torchcor.ionic import TenTusscherPanfilov
-from torchcor.simulator import ReactionEikonal
+from torchcor.electrophysiology import ReactionEikonal
 
 tc.set_device("cuda:0")
 dtype = tc.float64                              # openCARP is double precision

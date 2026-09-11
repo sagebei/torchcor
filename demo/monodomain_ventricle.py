@@ -1,10 +1,10 @@
 import torchcor as tc
-from torchcor.simulator import Monodomain
+from torchcor.electrophysiology import Monodomain
 from torchcor.ionic import TenTusscherPanfilov
 from pathlib import Path
 
 # Specify the GPU device for running the simulation
-tc.set_device("cuda:0")
+tc.set_device("cuda:1")
 dtype = tc.float32
 # The total simulation duration (ms)
 simulation_time = 500

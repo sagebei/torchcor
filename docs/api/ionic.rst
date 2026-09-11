@@ -8,7 +8,7 @@ minimal interface the simulators use:
 * ``differentiate(Vm)``   -- one ionic-current update step.
 
 Pass an instance (or a list, one per region) to
-:class:`~torchcor.simulator.monodomain.Monodomain` or ``ReactionEikonal``.
+:class:`~torchcor.electrophysiology.monodomain.Monodomain` or ``ReactionEikonal``.
 
 Available models
 ----------------

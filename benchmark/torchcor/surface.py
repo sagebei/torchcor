@@ -1,5 +1,5 @@
 import torchcor as tc
-from torchcor.simulator import Monodomain
+from torchcor.electrophysiology import Monodomain
 from torchcor.ionic import ModifiedMS2v, CourtemancheRamirezNattel
 from pathlib import Path
 

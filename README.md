@@ -73,7 +73,7 @@ all saved in `.pt` file format readable by `torch.load`. This execution takes 47
 
 ```python
 import torchcor as tc
-from torchcor.simulator import Monodomain
+from torchcor.electrophysiology import Monodomain
 from torchcor.ionic import TenTusscherPanfilov
 from pathlib import Path
 
@@ -135,7 +135,7 @@ TorchCor reconstructs the clinical **12-lead ECG** directly from a cardiac simul
 
 ```python
 import torch
-from torchcor.ecg import LeadField
+from torchcor.electrocardiogram import LeadField
 
 # Coupled heart–torso mesh; precompute one lead field per electrode
 lf = LeadField(torso_mesh_dir, heart_mesh_dir,

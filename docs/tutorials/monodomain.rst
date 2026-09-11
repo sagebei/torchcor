@@ -19,7 +19,7 @@ Pick a cell model and (optionally) tune its parameters:
 .. code-block:: python
 
    import torchcor as tc
-   from torchcor.simulator import Monodomain
+   from torchcor.electrophysiology import Monodomain
    from torchcor.ionic import TenTusscherPanfilov
 
    tc.set_device("cuda:0")

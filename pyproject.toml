@@ -34,8 +34,8 @@ packages = [
     "torchcor.core", 
     "torchcor.mechanics",
     "torchcor.ionic", 
-    "torchcor.simulator",
-    "torchcor.ecg",
+    "torchcor.electrophysiology",
+    "torchcor.electrocardiogram",
     "torchcor.tools",
     "torchcor.electrodes",
     "torchcor.signalanalysis",
@@ -43,3 +43,6 @@ packages = [
     "torchcor.signalanalysis.signalanalysis",
     "torchcor.signalanalysis.signalplot",
     "torchcor.signalanalysis.tools"] 
+
+[tool.pytest.ini_options]
+markers = ["slow: takes tens of seconds or more"]

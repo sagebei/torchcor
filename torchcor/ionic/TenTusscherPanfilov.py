@@ -221,7 +221,8 @@ class TenTusscherPanfilov:
         # construct the CaSS lookup table
         CaSS = torch.arange(self.CaSS_T_mn, self.CaSS_T_mx, self.CaSS_T_res).to(self.device).to(self.dtype)
         CaSS_tab = torch.zeros((CaSS.shape[0], self.CaSS_NROWS)).to(self.device).to(self.dtype)
-
+        
+        CaSS_tab[:, self.CaSS2_idx] = CaSS*CaSS
         FCaSS_inf = ((0.6/(1.+((CaSS/0.05)*(CaSS/0.05))))+0.4)
         tau_FCaSS = ((80./(1.+((CaSS/0.05)*(CaSS/0.05))))+2.)
         CaSS_tab[:, self.FCaSS_rush_larsen_B_idx] = (torch.exp(((-self.dt)/tau_FCaSS)))
