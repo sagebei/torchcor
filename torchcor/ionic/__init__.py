@@ -5,7 +5,8 @@ from torchcor.ionic.MitchellSchaeffer import MitchellSchaeffer
 from torchcor.ionic.ModifiedMS2v import ModifiedMS2v
 from torchcor.ionic.OHaraRudy import OHaraRudy
 from torchcor.ionic.TenTusscherPanfilov import TenTusscherPanfilov
-from torchcor.ionic.ToRORd import ToRORd
+from torchcor.ionic.Tomek19 import Tomek19
+from torchcor.ionic.Tomek20 import Tomek20
 from torchcor.ionic.TWorld import TWorld
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "ModifiedMS2v",
     "OHaraRudy",
     "TenTusscherPanfilov",
-    "ToRORd",
+    "Tomek19",
+    "Tomek20",
     "TWorld",
 ]

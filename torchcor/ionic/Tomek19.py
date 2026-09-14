@@ -5,7 +5,7 @@ from typing import Optional, List
 
 
 @torch.jit.script
-class ToRORd:
+class Tomek19:
     def __init__(self, 
                  dt: float, 
                  region_ids: Optional[List[int]] = None, 
@@ -13,7 +13,7 @@ class ToRORd:
                  device: torch.device = torch.device("cpu"),
                  dtype: torch.dtype = torch.float64):
         
-        self.name = "ToRORd"
+        self.name = "Tomek19"
         self.dt = dt
         self.region_ids = region_ids
         self.node_indices = torch.tensor([0])
@@ -351,7 +351,7 @@ class ToRORd:
         self.nCa_ss = torch.tensor([self.nCa_ss_init])
         self.xs1 = torch.tensor([self.xs1_init])
         self.xs2 = torch.tensor([self.xs2_init])
-
+        
         if not torch.jit.is_scripting():
             self.differentiate = torch.compile(
                 self.differentiate,
@@ -561,6 +561,12 @@ class ToRORd:
 
         Cai_row = self.interpolate(self.Cai, self.Cai_tab, self.Cai_T_mn, self.Cai_T_mx, self.Cai_T_res, self.Cai_T_step, self.Cai_T_mn_ind, self.Cai_T_mx_ind)
         V_row = self.interpolate(V, self.V_tab, self.V_T_mn, self.V_T_mx, self.V_T_res, self.V_T_step, self.V_T_mn_ind, self.V_T_mx_ind)
+        # GHK terms are 0/0 at V=0 (and underflow below ~1e-20); nudge Vfrt/Vffrt off exact zero, keeping Vffrt = F*Vfrt
+        Vfrt_safe = V_row[:, self.Vfrt_idx]
+        Vffrt_safe = V_row[:, self.Vffrt_idx]
+        _at_zero = (torch.abs(Vfrt_safe) < 1e-20)
+        Vfrt_safe = torch.where(_at_zero, torch.full_like(Vfrt_safe, 1e-12), Vfrt_safe)
+        Vffrt_safe = torch.where(_at_zero, torch.full_like(Vffrt_safe, 1e-12 * self.F), Vffrt_safe)
 
         # Compute storevars and external modvars
         CaMKb = ((self.CaMKo*(1.-(self.CaMKt)))/(1.+(self.KmCaM/self.Cass)))
@@ -583,7 +589,7 @@ class ToRORd:
         IKb = ((GKb*V_row[:, self.xKb_idx])*(V-(EK)))
         IKr = (((GKr*(sqrt((self.Ko/5.))))*self.O)*(V-(EK)))
         IKs = ((((GKs*Cai_row[:, self.KsCa_idx])*self.xs1)*self.xs2)*(V-(EKs)))
-        INab = (((self.PNab*V_row[:, self.Vffrt_idx])*((self.Nai*(torch.exp(V_row[:, self.Vfrt_idx])))-(self.Nao)))/((torch.exp(V_row[:, self.Vfrt_idx]))-(1.)))
+        INab = (((self.PNab*Vffrt_safe)*((self.Nai*(torch.exp(Vfrt_safe)))-(self.Nao)))/((torch.expm1(Vfrt_safe))))
         aK1 = (4.094/(1.+(torch.exp((0.1217*((V-(EK))-(49.934)))))))
         b3 = (((self.K3m*P)*self.H)/(1.+(self.MgATP/self.Kmgatp)))
         bK1 = (((15.72*(torch.exp((0.0674*((V-(EK))-(3.257))))))+(torch.exp((0.0618*((V-(EK))-(594.31))))))/(1.+(torch.exp((-0.1629*((V-(EK))+14.207))))))
@@ -597,16 +603,16 @@ class ToRORd:
         h5_ss = ((self.Nass*self.Nass)/((h4_ss*self.KNa1)*self.KNa2))
         h6_i = (1./h4_i)
         h6_ss = (1./h4_ss)
-        ICab = ((((self.PCab*4.)*V_row[:, self.Vffrt_idx])*(((gamma_Cai*self.Cai)*(torch.exp((2.*V_row[:, self.Vfrt_idx]))))-((self.gamma_Cao*self.Cao))))/((torch.exp((2.*V_row[:, self.Vfrt_idx])))-(1.)))
+        ICab = ((((self.PCab*4.)*Vffrt_safe)*(((gamma_Cai*self.Cai)*(torch.exp((2.*Vfrt_safe))))-((self.gamma_Cao*self.Cao))))/((torch.expm1((2.*Vfrt_safe)))))
         K1ss = (aK1/(aK1+bK1))
         K6_i = ((h6_i*self.Cai)*self.KCaon)
         K6_ss = ((h6_ss*self.Cass)*self.KCaon)
-        PhiCaK_i = ((V_row[:, self.Vffrt_idx]*(((gamma_Ki*self.Ki)*(torch.exp(V_row[:, self.Vfrt_idx])))-((self.gamma_Ko*self.Ko))))/((torch.exp(V_row[:, self.Vfrt_idx]))-(1.)))
-        PhiCaK_ss = ((V_row[:, self.Vffrt_idx]*(((gamma_Kss*self.Kss)*(torch.exp(V_row[:, self.Vfrt_idx])))-((self.gamma_Ko*self.Ko))))/((torch.exp(V_row[:, self.Vfrt_idx]))-(1.)))
-        PhiCaL_i = (((4.*V_row[:, self.Vffrt_idx])*(((gamma_Cai*self.Cai)*(torch.exp((2.*V_row[:, self.Vfrt_idx]))))-((self.gamma_Cao*self.Cao))))/((torch.exp((2.*V_row[:, self.Vfrt_idx])))-(1.)))
-        PhiCaL_ss = (((4.*V_row[:, self.Vffrt_idx])*(((gamma_Cass*self.Cass)*(torch.exp((2.*V_row[:, self.Vfrt_idx]))))-((self.gamma_Cao*self.Cao))))/((torch.exp((2.*V_row[:, self.Vfrt_idx])))-(1.)))
-        PhiCaNa_i = ((V_row[:, self.Vffrt_idx]*(((gamma_Nai*self.Nai)*(torch.exp(V_row[:, self.Vfrt_idx])))-((self.gamma_Nao*self.Nao))))/((torch.exp(V_row[:, self.Vfrt_idx]))-(1.)))
-        PhiCaNa_ss = ((V_row[:, self.Vffrt_idx]*(((gamma_Nass*self.Nass)*(torch.exp(V_row[:, self.Vfrt_idx])))-((self.gamma_Nao*self.Nao))))/((torch.exp(V_row[:, self.Vfrt_idx]))-(1.)))
+        PhiCaK_i = ((Vffrt_safe*(((gamma_Ki*self.Ki)*(torch.exp(Vfrt_safe)))-((self.gamma_Ko*self.Ko))))/((torch.expm1(Vfrt_safe))))
+        PhiCaK_ss = ((Vffrt_safe*(((gamma_Kss*self.Kss)*(torch.exp(Vfrt_safe)))-((self.gamma_Ko*self.Ko))))/((torch.expm1(Vfrt_safe))))
+        PhiCaL_i = (((4.*Vffrt_safe)*(((gamma_Cai*self.Cai)*(torch.exp((2.*Vfrt_safe))))-((self.gamma_Cao*self.Cao))))/((torch.expm1((2.*Vfrt_safe)))))
+        PhiCaL_ss = (((4.*Vffrt_safe)*(((gamma_Cass*self.Cass)*(torch.exp((2.*Vfrt_safe))))-((self.gamma_Cao*self.Cao))))/((torch.expm1((2.*Vfrt_safe)))))
+        PhiCaNa_i = ((Vffrt_safe*(((gamma_Nai*self.Nai)*(torch.exp(Vfrt_safe)))-((self.gamma_Nao*self.Nao))))/((torch.expm1(Vfrt_safe))))
+        PhiCaNa_ss = ((Vffrt_safe*(((gamma_Nass*self.Nass)*(torch.exp(Vfrt_safe)))-((self.gamma_Nao*self.Nao))))/((torch.expm1(Vfrt_safe))))
         a1 = ((self.K1p*(((self.Nai/V_row[:, self.KNai_idx])*(self.Nai/V_row[:, self.KNai_idx]))*(self.Nai/V_row[:, self.KNai_idx])))/(((((1.+(self.Nai/V_row[:, self.KNai_idx]))*(1.+(self.Nai/V_row[:, self.KNai_idx])))*(1.+(self.Nai/V_row[:, self.KNai_idx])))+((1.+(self.Ki/self.KKi))*(1.+(self.Ki/self.KKi))))-(1.)))
         b4 = ((self.K4m*((self.Ki/self.KKi)*(self.Ki/self.KKi)))/(((((1.+(self.Nai/V_row[:, self.KNai_idx]))*(1.+(self.Nai/V_row[:, self.KNai_idx])))*(1.+(self.Nai/V_row[:, self.KNai_idx])))+((1.+(self.Ki/self.KKi))*(1.+(self.Ki/self.KKi))))-(1.)))
         fCa = ((V_row[:, self.AfCaf_idx]*self.fCaf)+(V_row[:, self.AfCas_idx]*self.fCas))
@@ -845,10 +851,10 @@ if __name__ == "__main__":
     dt_imp = float(np.float32(dt))   # limpet keeps the IMP time step in a float
     stimulus = 20
     device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
-    ionic = ToRORd(cell_type="ENDO", 
-                  dt=dt_imp, 
-                  device=device, 
-                  dtype=torch.float64)
+    ionic = Tomek19(cell_type="ENDO", 
+                    dt=dt_imp, 
+                    device=device, 
+                    dtype=torch.float64)
     V = ionic.initialize(n_nodes=1)
 
     V_list = []
